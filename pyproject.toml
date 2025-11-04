@@ -1,12 +1,47 @@
-[tool.isort]
+[project]
+name = "isaaclab-env"
+version = "2.3.0"
+description = "Isaac Lab environment managed by uv"
+requires-python = "==3.11.*"
+dependencies = [
+  "isaaclab[isaacsim,all]==2.3.0",          # normal PyPI dependency
+  "rl-games @ git+https://github.com/isaac-sim/rl_games.git@python3.11",  # Git dependency
+  # "mujoco==3.3.8.dev826845370",             # pinned version
+  # "mujoco-warp @ git+https://github.com/google-deepmind/mujoco_warp@e605c406363805d949b75d50dd5ffb3d79bc3f70" # pinned version
+  # torch intentionally omitted (installed per-host outside the lock)
+]
 
+
+# Indexes
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com/"
+explicit = true
+
+[[tool.uv.index]]
+name = "mujoco"
+url = "https://py.mujoco.org"
+explicit = true
+
+# Optional: keep for x86_64 hosts using cu129 (safe to leave; unused on aarch64)
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
+[tool.uv.sources]
+warp-lang = { index = "nvidia" }
+mujoco     = { index = "mujoco" }
+
+[tool.isort]
 py_version = 310
 line_length = 120
 group_by_package = true
-
 # Files to skip
 skip_glob = ["docs/*", "logs/*", "_isaac_sim/*", ".vscode/*"]
-
 # Order of imports
 sections = [
     "FUTURE",
@@ -18,7 +53,6 @@ sections = [
     "TASK_FIRSTPARTY",
     "LOCALFOLDER",
 ]
-
 # Extra standard libraries considered as part of python (permissive licenses
 extra_standard_library = [
     "numpy",
@@ -64,7 +98,6 @@ known_task_firstparty = "isaaclab_tasks"
 known_local_folder = "config"
 
 [tool.pyright]
-
 include = ["source", "scripts"]
 exclude = [
     "**/__pycache__",
@@ -89,7 +122,6 @@ reportMissingModuleSource = "none" # -> most common: prettytable in mdp managers
 reportGeneralTypeIssues = "none"       # -> raises 218 errors (usage of literal MISSING in dataclasses)
 reportOptionalMemberAccess = "warning" # -> raises 8 errors
 reportPrivateUsage = "warning"
-
 
 [tool.codespell]
 skip = '*.usd,*.svg,*.png,_isaac_sim*,*.bib,*.css,*/_build'
