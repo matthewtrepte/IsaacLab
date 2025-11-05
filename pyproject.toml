@@ -4,37 +4,50 @@ version = "2.3.0"
 description = "Isaac Lab environment managed by uv"
 requires-python = "==3.11.*"
 dependencies = [
-  "isaaclab[isaacsim,all]==2.3.0",          # normal PyPI dependency
-  "rl-games @ git+https://github.com/isaac-sim/rl_games.git@python3.11",  # Git dependency
-  # "mujoco==3.3.8.dev826845370",             # pinned version
-  # "mujoco-warp @ git+https://github.com/google-deepmind/mujoco_warp@e605c406363805d949b75d50dd5ffb3d79bc3f70" # pinned version
-  # torch intentionally omitted (installed per-host outside the lock)
+  # Keep IsaacLab pinned; IsaacSim will be pulled via extras during locking
+  "isaaclab==2.3.0",
+  # "isaaclab[isaacsim,all]==2.3.0",
+  # Git dependency in PEP 508 form
+  "rl-games @ git+https://github.com/isaac-sim/rl_games.git@python3.11",
+  # Torch intentionally omitted (install per-host, outside the lock)
 ]
 
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
 
-# Indexes
-[[tool.uv.index]]
-url = "https://pypi.org/simple"
+[tool.uv]
+# Produce a Linux x86_64-only lock (avoids Windows wheels like pywin32)
+required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 
+# ---- INDEX ORDER MATTERS: NVIDIA FIRST ----
 [[tool.uv.index]]
 name = "nvidia"
 url = "https://pypi.nvidia.com/"
 explicit = true
 
 [[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+
+[[tool.uv.index]]
 name = "mujoco"
 url = "https://py.mujoco.org"
 explicit = true
 
-# Optional: keep for x86_64 hosts using cu129 (safe to leave; unused on aarch64)
+# Optional (kept for completeness; not used unless you add Torch to deps)
 [[tool.uv.index]]
 name = "pytorch-cu129"
 url = "https://download.pytorch.org/whl/cu129"
 explicit = true
 
 [tool.uv.sources]
-warp-lang = { index = "nvidia" }
-mujoco     = { index = "mujoco" }
+# 🔑 Force these packages to resolve from NVIDIA, not PyPI
+isaaclab        = { index = "nvidia" }
+isaacsim        = { index = "nvidia" }
+isaacsim-core   = { index = "nvidia" }
+warp-lang       = { index = "nvidia" }
+mujoco          = { index = "mujoco" }
 
 [tool.isort]
 py_version = 310
