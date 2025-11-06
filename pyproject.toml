@@ -1,60 +1,59 @@
 [project]
-name = "isaaclab-env"
+name = "isaaclab"
 version = "2.3.0"
-description = "Isaac Lab environment managed by uv"
-requires-python = "==3.11.*"
+description = "NVIDIA Isaac Lab: robotics simulation and reinforcement learning environments"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
 dependencies = [
-  # Keep IsaacLab pinned; IsaacSim will be pulled via extras during locking
-  "isaaclab==2.3.0",
-  # "isaaclab[isaacsim,all]==2.3.0",
-  # Git dependency in PEP 508 form
+  "isaaclab[isaacsim,all]==2.3.0",
+  "torch==2.7.0",
+  "torchvision==0.22.0",
+  # Optional (only if you use rl_games):
   "rl-games @ git+https://github.com/isaac-sim/rl_games.git@python3.11",
-  # Torch intentionally omitted (install per-host, outside the lock)
 ]
 
 [build-system]
-requires = ["setuptools>=61", "wheel"]
+requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.uv]
-# Produce a Linux x86_64-only lock (avoids Windows wheels like pywin32)
-required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
-
-# ---- INDEX ORDER MATTERS: NVIDIA FIRST ----
-[[tool.uv.index]]
-name = "nvidia"
-url = "https://pypi.nvidia.com/"
-explicit = true
-
+# Tell uv which indexes exist, and route specific packages to them.
+# (This avoids needing --index-url flags in commands.)
+# Docs: package indexes & sources mapping. 
+# - [[tool.uv.index]] defines named indexes
+# - [tool.uv.sources] maps packages -> index
+# Ref: docs.astral.sh/uv/concepts/indexes/ and .../projects/dependencies/
 [[tool.uv.index]]
 name = "pypi"
 url = "https://pypi.org/simple"
+default = true
 
 [[tool.uv.index]]
-name = "mujoco"
-url = "https://py.mujoco.org"
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
-# Optional (kept for completeness; not used unless you add Torch to deps)
 [[tool.uv.index]]
-name = "pytorch-cu129"
-url = "https://download.pytorch.org/whl/cu129"
+name = "nvidia"
+url = "https://pypi.nvidia.com/simple"
 explicit = true
 
 [tool.uv.sources]
-# 🔑 Force these packages to resolve from NVIDIA, not PyPI
-isaaclab        = { index = "nvidia" }
-isaacsim        = { index = "nvidia" }
-isaacsim-core   = { index = "nvidia" }
-warp-lang       = { index = "nvidia" }
-mujoco          = { index = "mujoco" }
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+isaaclab = { index = "nvidia" }
+
+
+
 
 [tool.isort]
+
 py_version = 310
 line_length = 120
 group_by_package = true
+
 # Files to skip
 skip_glob = ["docs/*", "logs/*", "_isaac_sim/*", ".vscode/*"]
+
 # Order of imports
 sections = [
     "FUTURE",
@@ -66,6 +65,7 @@ sections = [
     "TASK_FIRSTPARTY",
     "LOCALFOLDER",
 ]
+
 # Extra standard libraries considered as part of python (permissive licenses
 extra_standard_library = [
     "numpy",
@@ -111,6 +111,7 @@ known_task_firstparty = "isaaclab_tasks"
 known_local_folder = "config"
 
 [tool.pyright]
+
 include = ["source", "scripts"]
 exclude = [
     "**/__pycache__",
@@ -135,6 +136,7 @@ reportMissingModuleSource = "none" # -> most common: prettytable in mdp managers
 reportGeneralTypeIssues = "none"       # -> raises 218 errors (usage of literal MISSING in dataclasses)
 reportOptionalMemberAccess = "warning" # -> raises 8 errors
 reportPrivateUsage = "warning"
+
 
 [tool.codespell]
 skip = '*.usd,*.svg,*.png,_isaac_sim*,*.bib,*.css,*/_build'
