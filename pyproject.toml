@@ -6,8 +6,8 @@ readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
   "isaaclab[isaacsim,all]==2.3.0",
-  "torch==2.7.0",
-  "torchvision==0.22.0",
+  "torch==2.9.0",
+  "torchvision==0.24.0",
   # Optional (only if you use rl_games):
   "rl-games @ git+https://github.com/isaac-sim/rl_games.git@python3.11",
 ]
@@ -15,6 +15,11 @@ dependencies = [
 [build-system]
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["source"]
+include = ["isaaclab*", "isaaclab_assets*", "isaaclab_tasks*", "isaaclab_rl*"]
+exclude = ["apps*", "docs*", "logs*", "_isaac_sim*", "docker*", "outputs*", "env_isaaclab*", "anim_recordings*"]
 
 # Tell uv which indexes exist, and route specific packages to them.
 # (This avoids needing --index-url flags in commands.)
