@@ -1,32 +1,27 @@
+[build-system]
+# requires = ["hatchling"]
+# build-backend = "hatchling.build"
+
+
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+include = ["/source", "/scripts", "/apps", "/tools"]
+
 [project]
-name = "isaaclab"
+name = "isaaclab-test"
 version = "2.3.0"
-description = "NVIDIA Isaac Lab: robotics simulation and reinforcement learning environments"
-readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
   "isaaclab[isaacsim,all]==2.3.0",
-  "torch==2.9.0",
-  "torchvision==0.24.0",
-  # Optional (only if you use rl_games):
   "rl-games @ git+https://github.com/isaac-sim/rl_games.git@python3.11",
+  "torch==2.7.0",
+  "torchvision==0.22.0",
 ]
 
-[build-system]
-requires = ["setuptools", "wheel"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools.packages.find]
-where = ["source"]
-include = ["isaaclab*", "isaaclab_assets*", "isaaclab_tasks*", "isaaclab_rl*"]
-exclude = ["apps*", "docs*", "logs*", "_isaac_sim*", "docker*", "outputs*", "env_isaaclab*", "anim_recordings*"]
-
-# Tell uv which indexes exist, and route specific packages to them.
-# (This avoids needing --index-url flags in commands.)
-# Docs: package indexes & sources mapping. 
-# - [[tool.uv.index]] defines named indexes
-# - [tool.uv.sources] maps packages -> index
-# Ref: docs.astral.sh/uv/concepts/indexes/ and .../projects/dependencies/
+# UV indexes & source routing (Newton-style)
 [[tool.uv.index]]
 name = "pypi"
 url = "https://pypi.org/simple"
@@ -39,14 +34,13 @@ explicit = true
 
 [[tool.uv.index]]
 name = "nvidia"
-url = "https://pypi.nvidia.com/simple"
+url = "https://pypi.nvidia.com"
 explicit = true
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
 isaaclab = { index = "nvidia" }
-
 
 
 
