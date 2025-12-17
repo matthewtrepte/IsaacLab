@@ -162,17 +162,17 @@ class NewtonViewerGL(ViewerGL):
                     show_joints = self.show_joints
                     changed, self.show_joints = imgui.checkbox("Show Joints", show_joints)
 
-                    # Contact visualization
-                    show_contacts = self.show_contacts
-                    changed, self.show_contacts = imgui.checkbox("Show Contacts", show_contacts)
+                    # # Contact visualization
+                    # show_contacts = self.show_contacts
+                    # changed, self.show_contacts = imgui.checkbox("Show Contacts", show_contacts)
 
                     # Spring visualization
                     show_springs = self.show_springs
                     changed, self.show_springs = imgui.checkbox("Show Springs", show_springs)
 
-                    # Center of mass visualization
-                    show_com = self.show_com
-                    changed, self.show_com = imgui.checkbox("Show Center of Mass", show_com)
+                    # # Center of mass visualization
+                    # show_com = self.show_com
+                    # changed, self.show_com = imgui.checkbox("Show Center of Mass", show_com)
 
             # Rendering Options section
             imgui.set_next_item_open(True, imgui.Cond_.appearing)
