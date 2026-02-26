@@ -137,19 +137,165 @@ class PhysxSceneDataProvider:
             self._setup_rigid_body_view()
             self._setup_articulation_view()
 
+    def _get_runtime_clone_plan(self):
+        """Best-effort fetch of runtime Newton clone plan."""
+        try:
+            from isaaclab_newton.cloner.runtime_clone_plan import get_plan
+
+            plan = get_plan(self._stage)
+            if plan is not None:
+                logger.info(
+                    "[PhysxSceneDataProvider] Runtime clone plan found: sources=%d envs=%d map_shape=%s",
+                    len(getattr(plan, "sources", [])),
+                    int(getattr(plan, "env_ids").shape[0]) if hasattr(getattr(plan, "env_ids", None), "shape") else -1,
+                    tuple(getattr(plan, "mapping").shape) if hasattr(getattr(plan, "mapping", None), "shape") else None,
+                )
+            else:
+                logger.info("[PhysxSceneDataProvider] No runtime clone plan found for this stage.")
+            return plan
+        except Exception as exc:
+            logger.info("[PhysxSceneDataProvider] Clone plan unavailable; proceeding without it. reason=%s", exc)
+            return None
+
+    def _is_homogeneous_clone_plan(self, plan, expected_envs: int) -> tuple[bool, str]:
+        """Check if clone plan assigns the same source-selection vector to all envs."""
+        mapping = getattr(plan, "mapping", None)
+        env_ids = getattr(plan, "env_ids", None)
+        if mapping is None or env_ids is None:
+            return False, "missing mapping/env_ids"
+        if not hasattr(mapping, "shape") or len(mapping.shape) != 2:
+            return False, f"unexpected mapping shape: {getattr(mapping, 'shape', None)}"
+        if not hasattr(env_ids, "shape") or len(env_ids.shape) != 1:
+            return False, f"unexpected env_ids shape: {getattr(env_ids, 'shape', None)}"
+        if expected_envs <= 0:
+            return False, "expected_envs <= 0"
+        if int(env_ids.shape[0]) != expected_envs:
+            return False, f"env count mismatch (plan={int(env_ids.shape[0])}, scene={expected_envs})"
+        if int(mapping.shape[1]) != expected_envs:
+            return False, f"mapping width mismatch (mapping={int(mapping.shape[1])}, scene={expected_envs})"
+        # Homogeneous if every env column equals the first env column.
+        first_col = mapping[:, 0]
+        same = bool((mapping == first_col.unsqueeze(1)).all().item())
+        if not same:
+            return False, "mapping columns differ across environments (heterogeneous)"
+        if int(first_col.to(dtype=first_col.dtype).sum().item()) <= 0:
+            return False, "no selected sources in first env column"
+        return True, "homogeneous mapping"
+
+    def _validate_model_env_path_coverage(self, model, expected_envs: int) -> tuple[bool, str]:
+        """Validate model labels preserve /World/envs/env_<id> path conventions."""
+        body_labels = list(getattr(model, "body_label", []) or [])
+        if not body_labels:
+            return False, "model has no body labels"
+        env_ids = set()
+        malformed = 0
+        for label in body_labels:
+            eid = self._env_id_from_path(str(label))
+            if eid is None:
+                malformed += 1
+            else:
+                env_ids.add(eid)
+        if malformed == len(body_labels):
+            return False, "none of body labels match /World/envs/env_<id> convention"
+        if len(env_ids) != expected_envs:
+            return False, f"env coverage mismatch in body labels (found={len(env_ids)}, expected={expected_envs})"
+        missing = [eid for eid in range(expected_envs) if eid not in env_ids]
+        if missing:
+            return False, f"missing env ids in model labels: {missing[:8]}"
+        return True, "label coverage valid"
+
+    def _build_newton_scene_builder_from_env_loop(self, builder) -> None:
+        """Current env-loop parser path: parse globals once + each env root separately."""
+        builder.add_usd(self._stage, ignore_paths=[r"/World/envs/.*"])
+        for env_id in range(self.get_num_envs()):
+            builder.begin_world(label=f"env_{env_id}")
+            builder.add_usd(self._stage, root_path=f"/World/envs/env_{env_id}")
+            builder.end_world()
+
+    def _build_newton_model_try_homogeneous_plan(self):
+        """Try homogeneous build from runtime clone plan; return model/state or (None, None, reason)."""
+        try:
+            from newton import ModelBuilder
+        except Exception as exc:
+            return None, None, f"ModelBuilder unavailable: {exc}"
+
+        plan = self._get_runtime_clone_plan()
+        if plan is None:
+            return None, None, "no clone plan"
+
+        num_envs = self.get_num_envs()
+        is_homogeneous, reason = self._is_homogeneous_clone_plan(plan, num_envs)
+        logger.info(
+            "[PhysxSceneDataProvider] Homogeneous clone plan check: result=%s reason=%s",
+            is_homogeneous,
+            reason,
+        )
+        if not is_homogeneous:
+            # TODO: Add heterogeneous mapped build path from clone plan.
+            logger.warning(
+                "[PhysxSceneDataProvider] Clone plan is not homogeneous (%s). "
+                "TODO: heterogeneous clone-plan path not implemented; using env-loop parse.",
+                reason,
+            )
+            return None, None, f"non-homogeneous plan: {reason}"
+
+        env_ids = getattr(plan, "env_ids", None)
+        mapping = getattr(plan, "mapping", None)
+        # Determine canonical source env from first selected source row.
+        first_col = mapping[:, 0]
+        selected_rows = [i for i, selected in enumerate(first_col.tolist()) if bool(selected)]
+        if not selected_rows:
+            return None, None, "homogeneous plan has empty selection rows"
+        canonical_env_id = int(env_ids[0].item())
+        logger.info(
+            "[PhysxSceneDataProvider] Attempting homogeneous Newton build: canonical_env_id=%d selected_rows=%s",
+            canonical_env_id,
+            selected_rows[:8],
+        )
+
+        scene_builder = ModelBuilder(up_axis=self._up_axis)
+        scene_builder.add_usd(self._stage, ignore_paths=[r"/World/envs/.*"])
+
+        # Parse canonical env once, then replicate as worlds. This can fail if label
+        # conventions differ; we validate immediately after finalize and fallback.
+        world_builder = ModelBuilder(up_axis=self._up_axis)
+        world_builder.add_usd(self._stage, root_path=f"/World/envs/env_{canonical_env_id}")
+        for env_id in range(num_envs):
+            scene_builder.add_world(world_builder, label_prefix=f"/World/envs/env_{env_id}")
+
+        model = scene_builder.finalize(device=self._device)
+        state = model.state()
+        valid, valid_reason = self._validate_model_env_path_coverage(model, num_envs)
+        logger.info(
+            "[PhysxSceneDataProvider] Homogeneous build label validation: valid=%s reason=%s",
+            valid,
+            valid_reason,
+        )
+        if not valid:
+            return None, None, f"homogeneous model failed label validation: {valid_reason}"
+        return model, state, "homogeneous clone plan"
+
     def _build_newton_model_from_usd(self) -> None:
         """Build Newton model from USD and cache body/articulation paths."""
         try:
             from newton import ModelBuilder
 
-            builder = ModelBuilder(up_axis=self._up_axis)
-            builder.add_usd(self._stage, ignore_paths=[r"/World/envs/.*"])
-            for env_id in range(self.get_num_envs()):
-                builder.begin_world()
-                builder.add_usd(self._stage, root_path=f"/World/envs/env_{env_id}")
-                builder.end_world()
-            self._newton_model = builder.finalize(device=self._device)
-            self._newton_state = self._newton_model.state()
+            # Try homogeneous clone-plan optimization first, then fallback to env-loop.
+            model, state, build_reason = self._build_newton_model_try_homogeneous_plan()
+            if model is None or state is None:
+                logger.warning(
+                    "[PhysxSceneDataProvider] Falling back to env-loop Newton build. reason=%s",
+                    build_reason,
+                )
+                builder = ModelBuilder(up_axis=self._up_axis)
+                self._build_newton_scene_builder_from_env_loop(builder)
+                self._newton_model = builder.finalize(device=self._device)
+                self._newton_state = self._newton_model.state()
+                logger.info("[PhysxSceneDataProvider] Newton model built via env-loop parse.")
+            else:
+                self._newton_model = model
+                self._newton_state = state
+                logger.info("[PhysxSceneDataProvider] Newton model built via %s.", build_reason)
 
             # Extract scene structure from Newton model (single source of truth)
             self._rigid_body_paths = list(self._newton_model.body_label)
