@@ -33,6 +33,43 @@ from isaaclab.app.settings_manager import get_settings_manager, initialize_carb_
 # import logger
 logger = logging.getLogger(__name__)
 
+
+def sync_visualizer_cli_settings_to_carb(launcher_args: dict) -> None:
+    """Write visualizer CLI selection and ``--max_visible_envs`` to carb settings.
+
+    Callers may set ``visualizer_explicit`` / ``visualizer_disable_all`` when those values
+    were resolved elsewhere (e.g. :class:`AppLauncher` strips flags from *launcher_args*).
+    Otherwise ``disable_all`` is inferred from ``"none"`` in ``visualizer``.
+
+    Also used when Kit is skipped (see :mod:`isaaclab_tasks.utils.sim_launcher`).
+    """
+    visualizers = launcher_args.get("visualizer")
+
+    if "max_visible_envs" in launcher_args:
+        v = launcher_args["max_visible_envs"]
+        if v is not None and int(v) < 0:
+            raise ValueError(f"Invalid value for --max_visible_envs: {v}. Expected non-negative int.")
+
+    cli_explicit = bool(launcher_args.get("visualizer_explicit", False))
+    if "visualizer_disable_all" in launcher_args:
+        cli_disable_all = bool(launcher_args["visualizer_disable_all"])
+    else:
+        cli_disable_all = bool(cli_explicit) and visualizers is not None and "none" in visualizers
+
+    with contextlib.suppress(Exception):
+        visualizer_str = " ".join(visualizers) if visualizers else ""
+        settings = get_settings_manager()
+        settings.set_string("/isaaclab/visualizer/types", visualizer_str)
+        settings.set_bool("/isaaclab/visualizer/explicit", cli_explicit)
+        settings.set_bool("/isaaclab/visualizer/disable_all", cli_disable_all)
+
+        # Sentinel: ``-1`` means ``--max_visible_envs`` was not passed (see ``SimulationContext``).
+        if "max_visible_envs" in launcher_args:
+            settings.set_int("/isaaclab/visualizer/max_visible_envs", int(launcher_args["max_visible_envs"]))
+        else:
+            settings.set_int("/isaaclab/visualizer/max_visible_envs", -1)
+
+
 # Suppress noisy debug-level logs from third-party libraries
 logging.getLogger("websockets").setLevel(logging.WARNING)
 logging.getLogger("matplotlib").setLevel(logging.WARNING)
@@ -188,7 +225,6 @@ class AppLauncher:
         self._livestream: Literal[0, 1, 2]  # 0: Disabled, 1: WebRTC public, 2: WebRTC private
         self._offscreen_render: bool  # 0: Disabled, 1: Enabled
         self._sim_experience_file: str  # Experience file to load
-        self._visualizer_max_worlds: int | None  # Optional max worlds override for Newton-based visualizers
         self._video_enabled: bool  # Whether --video recording is enabled
 
         # Exposed to train scripts
@@ -330,10 +366,9 @@ class AppLauncher:
           - Multiple visualizers can be specified as a comma-delimited list:
             ``--viz rerun,newton,viser``.
 
-        * ``visualizer_max_worlds`` (int | None): Optional global override for the maximum number of worlds
-          rendered in Newton-based visualizers (newton, rerun, viser). If omitted, each visualizer uses its
-          config default.
-
+        * ``max_visible_envs`` (int | None): Overrides ``VisualizerCfg.max_visible_envs`` for the run:
+          contiguous env count when ``visible_env_indices`` is unset, or truncation length for explicit index lists
+          (newton, rerun, viser, kit). ``visible_env_indices`` is config-only, not a CLI flag.
 
         .. _`WebRTC`: https://docs.isaacsim.omniverse.nvidia.com/latest/installation/manual_livestream_clients.html#isaac-sim-short-webrtc-streaming-client
 
@@ -485,12 +520,11 @@ class AppLauncher:
             ),
         )
         arg_group.add_argument(
-            "--visualizer_max_worlds",
+            "--max_visible_envs",
             type=int,
-            default=AppLauncher._APPLAUNCHER_CFG_INFO["visualizer_max_worlds"][1],
+            default=argparse.SUPPRESS,
             help=(
-                "Optional global max worlds override for Newton-based visualizers (newton/rerun/viser). "
-                "If omitted, visualizer config defaults are used."
+                "When set, caps the nums of envs shown in the launched visualizers to improve performance."
             ),
         )
         # special flag for backwards compatibility
@@ -513,7 +547,7 @@ class AppLauncher:
         "device": ([str], "cuda:0"),
         "experience": ([str], ""),
         "rendering_mode": ([str], "balanced"),
-        "visualizer_max_worlds": ([int, type(None)], None),
+        "max_visible_envs": ([int, type(None)], None),
     }
     """A dictionary of arguments added manually by the :meth:`AppLauncher.add_app_launcher_args` method.
 
@@ -1152,28 +1186,14 @@ class AppLauncher:
         settings.set_float("/isaaclab/anim_recording/stop_time", stop_time)
 
     def _set_visualizer_settings(self, launcher_args: dict) -> None:
-        """Store visualizer selection and max-worlds override in settings."""
-        visualizers = launcher_args.get("visualizer")
-        visualizer_max_worlds = launcher_args.get("visualizer_max_worlds")
-
-        if visualizer_max_worlds is not None and visualizer_max_worlds < 0:
-            raise ValueError(
-                f"Invalid value for --visualizer_max_worlds: {visualizer_max_worlds}. Expected non-negative int."
-            )
-
-        with contextlib.suppress(Exception):
-            visualizer_str = " ".join(visualizers) if visualizers else ""
-            settings = get_settings_manager()
-            cli_visualizer_explicit = getattr(self, "_cli_visualizer_explicit", False)
-            cli_visualizer_disable_all = getattr(self, "_cli_visualizer_disable_all", False)
-            settings.set_string("/isaaclab/visualizer/types", visualizer_str)
-            settings.set_bool("/isaaclab/visualizer/explicit", cli_visualizer_explicit)
-            settings.set_bool("/isaaclab/visualizer/disable_all", cli_visualizer_disable_all)
-            # Store as int setting where -1 means "use per-visualizer defaults".
-            if visualizer_max_worlds is None:
-                settings.set_int("/isaaclab/visualizer/max_worlds", -1)
-            else:
-                settings.set_int("/isaaclab/visualizer/max_worlds", int(visualizer_max_worlds))
+        """Persist visualizer CLI flags and ``max_visible_envs`` override for :class:`SimulationContext`."""
+        sync_visualizer_cli_settings_to_carb(
+            {
+                **launcher_args,
+                "visualizer_explicit": getattr(self, "_cli_visualizer_explicit", False),
+                "visualizer_disable_all": getattr(self, "_cli_visualizer_disable_all", False),
+            }
+        )
 
     def _interrupt_signal_handle_callback(self, signal, frame):
         """Handle the interrupt signal from the keyboard."""

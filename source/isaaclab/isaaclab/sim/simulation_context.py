@@ -296,8 +296,8 @@ class SimulationContext:
             UsdPhysics.SetStageKilogramsPerUnit(self.stage, 1.0)
 
             # Find and delete any existing physics scene.
-            # Collect paths first to avoid mutating the stage while traversing,
-            # which can invalidate the USD iterator.
+            # Collect paths first to avoid mutating the stage while traversing
+            # (iterator invalidation during deletion).
             physics_scene_paths = [
                 prim.GetPath().pathString for prim in self.stage.Traverse() if prim.GetTypeName() == "PhysicsScene"
             ]
@@ -349,7 +349,13 @@ class SimulationContext:
 
     def has_active_visualizers(self) -> bool:
         """Return whether any visualizer path is active for rendering/camera control."""
-        return bool(self.get_setting("/isaaclab/visualizer/types"))
+        return bool(self.get_setting("/isaaclab/visualizer/types")) or bool(
+            self.get_setting("/isaaclab/video/auto_start_kit")
+        )
+
+    def can_render_rgb_array(self) -> bool:
+        """Return whether rgb-array rendering is currently available."""
+        return self.has_gui or self.has_offscreen_render or self.has_active_visualizers()
 
     @property
     def is_rendering(self) -> bool:
@@ -424,39 +430,23 @@ class SimulationContext:
         # App launcher writes this as a single string; accept comma and/or whitespace separators.
         return [value for chunk in requested.split(",") for value in chunk.split() if value]
 
-    def _get_cli_visualizer_max_worlds_override(self) -> tuple[bool, int | None]:
-        """Return CLI override for visualizer max worlds.
-
-        Returns:
-            Tuple of (has_override, value), where value=None means no override.
-        """
-        value = self.get_setting("/isaaclab/visualizer/max_worlds")
-        if value is None:
-            return False, None
-        try:
-            max_worlds = int(value)
-        except (TypeError, ValueError):
-            logger.warning("[SimulationContext] Invalid /isaaclab/visualizer/max_worlds setting: %r", value)
-            return False, None
-
-        # -1 means no CLI override.
-        if max_worlds < 0:
-            return False, None
-        return True, max_worlds
-
     def _apply_visualizer_cli_overrides(self, visualizer_cfgs: list[Any]) -> None:
-        """Apply CLI visualizer overrides (e.g., max worlds) to resolved configs.
+        """Apply ``--max_visible_envs`` to every resolved visualizer cfg when set in settings.
 
-        Args:
-            visualizer_cfgs: Resolved visualizer configs to update in-place.
+        AppLauncher stores ``/isaaclab/visualizer/max_visible_envs`` as ``-1`` when the flag was
+        omitted; any non-negative int overrides :attr:`VisualizerCfg.max_visible_envs` on each cfg.
         """
-        has_max_worlds_override, max_worlds_override = self._get_cli_visualizer_max_worlds_override()
-        if not has_max_worlds_override:
+        raw = self.get_setting("/isaaclab/visualizer/max_visible_envs")
+        try:
+            max_visible = int(raw) if raw is not None else -1
+        except (TypeError, ValueError):
+            logger.warning("[SimulationContext] Invalid /isaaclab/visualizer/max_visible_envs: %r", raw)
             return
-
+        if max_visible < 0:
+            return
         for cfg in visualizer_cfgs:
-            if hasattr(cfg, "max_worlds"):
-                cfg.max_worlds = max_worlds_override
+            if hasattr(cfg, "max_visible_envs"):
+                cfg.max_visible_envs = max_visible
 
     def _is_cli_visualizer_explicit(self) -> bool:
         """Return ``True`` when visualizers were explicitly provided via CLI."""
