@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
-    from isaaclab.scene.scene_data_provider import SceneDataProvider
+    from isaaclab.scene_data import SceneDataProvider
 
     from .visualizer_cfg import VisualizerCfg
 
@@ -52,6 +52,13 @@ class BaseVisualizer(ABC):
             scene_data_provider: Scene data provider used by the visualizer.
         """
         raise NotImplementedError
+
+    def _set_scene_data_provider(self, scene_data_provider: SceneDataProvider) -> SceneDataProvider:
+        """Store the scene data provider shared by all visualizer backends."""
+        if scene_data_provider is None:
+            raise RuntimeError(f"{self.__class__.__name__} requires a scene_data_provider.")
+        self._scene_data_provider = scene_data_provider
+        return scene_data_provider
 
     @abstractmethod
     def step(self, dt: float) -> None:
