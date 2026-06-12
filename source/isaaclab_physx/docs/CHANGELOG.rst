@@ -1,6 +1,16 @@
 Changelog
 ---------
 
+1.1.6 (2026-06-12)
+~~~~~~~~~~~~~~~~~~
+
+Fixed
+^^^^^
+
+* Fixed PhysX scene-data rigid-body view discovery to ignore USD joint prims
+  even when an asset authors ``RigidBodyAPI`` on them.
+
+
 1.1.5 (2026-06-09)
 ~~~~~~~~~~~~~~~~~~
 
