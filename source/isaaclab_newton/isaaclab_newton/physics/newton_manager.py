@@ -311,6 +311,10 @@ class NewtonManager(PhysicsManager):
     _cl_site_index_map: dict[str, _SiteEntry] = {}
     _cl_fabric_body_bindings: list[tuple[str, int]] | None = None
     _world_xforms: list[wp.transform] | None = None
+    # Per-source builders retained from replication, keyed by clone-plan source
+    # path. Single-model consumers (e.g. batched Newton IK) finalize a single-env
+    # model from these and resolve it via ``resolve_clone_plan_source``.
+    _cl_protos: dict[str, ModelBuilder] = {}
     _deformable_registry: list = []
     _per_world_builder_hooks: list[Callable[[ModelBuilder, int, list[float], list[float]], None]] = []
     _post_replicate_hooks: list[Callable[[ModelBuilder], None]] = []
@@ -788,6 +792,7 @@ class NewtonManager(PhysicsManager):
         NewtonManager._cl_site_index_map = {}
         NewtonManager._cl_fabric_body_bindings = None
         NewtonManager._world_xforms = None
+        NewtonManager._cl_protos = {}
         NewtonManager._pending_extended_state_attributes = set()
         NewtonManager._pending_extended_contact_attributes = set()
         NewtonManager._views = []
@@ -1242,6 +1247,7 @@ class NewtonManager(PhysicsManager):
             _, proto_path = env_paths[0]
             source_builders = {proto_path: cls.create_builder(up_axis=up_axis)}
             source_builders[proto_path].add_usd(stage, root_path=proto_path, schema_resolvers=schema_resolvers)
+            cls._cl_protos = source_builders
 
             global_site_indices, source_site_indices, env_root_sites = cls._cl_inject_sites(builder, source_builders)
             xform_cache = UsdGeom.XformCache()
