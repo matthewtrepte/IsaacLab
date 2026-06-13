@@ -1,6 +1,26 @@
 Changelog
 ---------
 
+1.0.0 (2026-06-13)
+~~~~~~~~~~~~~~~~~~
+
+Added
+^^^^^
+
+* Added :class:`~isaaclab_newton.ik.NewtonIKSolver` and
+  :class:`~isaaclab_newton.envs.mdp.actions.NewtonInverseKinematicsAction`
+  for Newton-backed inverse kinematics, including named pose objectives and
+  custom Newton objective passthrough.
+* Added persistent IK seeds and helpers to initialize pose-objective targets
+  from live Newton body transforms.
+
+Fixed
+^^^^^
+
+* Fixed the ``newton[sim]`` dependency pin to use Newton commit
+  ``811968bfb7cc7ff4e37b9260a2ba56930a3e605e``.
+
+
 0.16.0 (2026-06-12)
 ~~~~~~~~~~~~~~~~~~~
 
