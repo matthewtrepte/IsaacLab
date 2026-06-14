@@ -1,6 +1,16 @@
 Changelog
 ---------
 
+1.0.1 (2026-06-14)
+~~~~~~~~~~~~~~~~~~
+
+Fixed
+^^^^^
+
+* Added an explicit ``pyglet>=2.1.6,<3`` dependency for the Newton visualizer
+  extra so the OpenGL viewer does not rely on ambient transitive installs.
+
+
 1.0.0 (2026-06-13)
 ~~~~~~~~~~~~~~~~~~
 
