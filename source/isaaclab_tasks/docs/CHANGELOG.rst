@@ -1,6 +1,17 @@
 Changelog
 ---------
 
+8.0.2 (2026-06-17)
+~~~~~~~~~~~~~~~~~~
+
+Changed
+^^^^^^^
+
+* Updated golden images for the ``dexsuite_kuka_hetero`` Newton renderer tests (RGB and RGBA) to
+  reflect corrected shape colors now that USD material colors are propagated before clone
+  replication.
+
+
 8.0.1 (2026-06-14)
 ~~~~~~~~~~~~~~~~~~
 

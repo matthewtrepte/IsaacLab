@@ -1,6 +1,31 @@
 Changelog
 ---------
 
+1.0.3 (2026-06-17)
+~~~~~~~~~~~~~~~~~~
+
+Added
+^^^^^
+
+* Added a ``skip_forward`` argument to the root, body, and joint state writers (e.g.
+  ``write_root_link_pose_to_sim_index``) to defer cached-buffer invalidation when several
+  writes are batched before a single forward pass.
+
+Changed
+^^^^^^^
+
+* Moved Newton shape color propagation from post-finalize (on the model) to pre-clone (on the
+  builder) in :class:`~isaaclab_newton.physics.NewtonManager` and the cloner utilities. Colors are
+  now set via :func:`~isaaclab.sim.utils.newton_model_utils.replace_newton_builder_shape_colors`
+  before ``ModelBuilder`` replication, so all cloned environments automatically inherit the correct
+  USD material colors without an extra GPU scatter pass after finalization.
+
+Fixed
+^^^^^
+
+* Fixed stale cached asset pose and velocity state after simulation state writes.
+
+
 1.0.2 (2026-06-16)
 ~~~~~~~~~~~~~~~~~~
 
