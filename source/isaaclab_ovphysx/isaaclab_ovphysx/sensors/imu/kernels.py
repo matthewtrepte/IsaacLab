@@ -44,7 +44,7 @@ def imu_update_kernel(
     if not env_mask[idx]:
         return
 
-    # Skip envs that have not been stepped since their last reset: PhysX velocities still
+    # Skip envs that have not been stepped since their last reset: OVPhysX velocities still
     # hold pre-reset values, so the finite-difference acceleration would be spurious.
     if timestamp[idx] == 0.0:
         return

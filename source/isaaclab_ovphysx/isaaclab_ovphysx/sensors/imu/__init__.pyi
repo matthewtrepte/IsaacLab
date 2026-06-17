@@ -4,12 +4,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 __all__ = [
-    "ContactSensor",
-    "ContactSensorCfg",
-    "ContactSensorData",
     "Imu",
     "ImuData",
 ]
 
-from .contact_sensor import ContactSensor, ContactSensorCfg, ContactSensorData
-from .imu import Imu, ImuData
+from .imu import Imu
+from .imu_data import ImuData
