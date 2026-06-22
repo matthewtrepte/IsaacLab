@@ -9,10 +9,13 @@ __all__ = [
     "ContactSensorData",
     "Imu",
     "ImuData",
+    "JointWrenchSensor",
+    "JointWrenchSensorData",
     "Pva",
     "PvaData",
 ]
 
 from .contact_sensor import ContactSensor, ContactSensorCfg, ContactSensorData
 from .imu import Imu, ImuData
+from .joint_wrench import JointWrenchSensor, JointWrenchSensorData
 from .pva import Pva, PvaData
