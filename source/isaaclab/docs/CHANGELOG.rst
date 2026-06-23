@@ -1,6 +1,16 @@
 Changelog
 ---------
 
+7.0.5 (2026-06-23)
+~~~~~~~~~~~~~~~~~~
+
+Added
+^^^^^
+
+* Added OVPhysX backend dispatch typing for
+  :class:`~isaaclab.sensors.FrameTransformer`.
+
+
 7.0.4 (2026-06-18)
 ~~~~~~~~~~~~~~~~~~
 

@@ -1,6 +1,23 @@
 Changelog
 ---------
 
+8.0.4 (2026-06-23)
+~~~~~~~~~~~~~~~~~~
+
+Added
+^^^^^
+
+* Added OVPhysX physics preset support to
+  ``Isaac-Franka-Cabinet-Direct-v0``.
+
+Changed
+^^^^^^^
+
+* Updated golden images for the ``dexsuite_kuka_hetero`` tests combining Newton
+  physics with the IsaacSim RTX renderer, reflecting corrected USD prim
+  population.
+
+
 8.0.3 (2026-06-18)
 ~~~~~~~~~~~~~~~~~~
 
