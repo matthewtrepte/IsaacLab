@@ -1,6 +1,25 @@
 Changelog
 ---------
 
+2.1.0 (2026-06-24)
+~~~~~~~~~~~~~~~~~~
+
+Added
+^^^^^
+
+* Overrode :meth:`provides_temporal_camera_data` on :class:`IsaacRtxRenderer` to return ``True``
+  only for the ``rgb``/``rgba`` beauty buffer (temporally accumulated by DLSS); the depth, albedo,
+  simple_shading, and segmentation AOVs return ``False`` as they bypass DLSS.
+
+Fixed
+^^^^^
+
+* Fixed the optional ``newton[sim]`` dependency pin to use Newton commit
+  ``79e95bf5571d70a0a46c8eaedc80644531d27368``, including the
+  RenderContext triangle-mesh construction fix from `newton-physics/newton#3199
+  <https://github.com/newton-physics/newton/pull/3199>`_.
+
+
 2.0.2 (2026-06-17)
 ~~~~~~~~~~~~~~~~~~
 

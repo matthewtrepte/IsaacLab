@@ -1,6 +1,26 @@
 Changelog
 ---------
 
+1.1.0 (2026-06-24)
+~~~~~~~~~~~~~~~~~~
+
+Added
+^^^^^
+
+* Overrode :meth:`provides_implicit_damping` on :class:`NewtonManager` to return ``False`` (its
+  symplectic integrator has no implicit damping) and :meth:`provides_temporal_camera_data` on
+  :class:`NewtonWarpRenderer` to return ``False`` (the rasterizer accumulates no temporal data),
+  so camera tasks can auto-enable frame stacking for the Newton combos that need it.
+
+Fixed
+^^^^^
+
+* Fixed the ``newton[sim]`` dependency pin to use Newton commit
+  ``79e95bf5571d70a0a46c8eaedc80644531d27368``, including the
+  RenderContext triangle-mesh construction fix from `newton-physics/newton#3199
+  <https://github.com/newton-physics/newton/pull/3199>`_.
+
+
 1.0.4 (2026-06-23)
 ~~~~~~~~~~~~~~~~~~
 

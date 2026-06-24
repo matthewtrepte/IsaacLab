@@ -1,6 +1,17 @@
 Changelog
 ---------
 
+0.5.0 (2026-06-24)
+~~~~~~~~~~~~~~~~~~
+
+Added
+^^^^^
+
+* Overrode :meth:`provides_temporal_camera_data` on :class:`OVRTXRenderer` to return ``True``
+  only for the ``rgb``/``rgba`` beauty buffer (temporally accumulated by DLSS), matching Isaac RTX;
+  other AOVs return ``False``.
+
+
 0.4.6 (2026-06-16)
 ~~~~~~~~~~~~~~~~~~
 
