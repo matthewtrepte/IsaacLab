@@ -2178,9 +2178,8 @@ class Articulation(BaseArticulation):
             outputs=[self._data._body_com_pose_b.data],
             device=self._device,
         )
-        # Invalidate derived buffers that depend on body_com_pose_b.
-        self.data._root_com_pose_w.timestamp = -1.0
-        self.data._body_com_pose_w.timestamp = -1.0
+        self._data._body_com_pose_b.timestamp = self._data._sim_timestamp
+        self._data._reset_body_com_pose_b_dependents()
         cpu_env_ids = self._get_cpu_env_ids(env_ids)
         wp.copy(self.data._cpu_body_coms, self._data._body_com_pose_b.data)
         self._root_view.set_attribute(TT.BODY_COM_POSE, self.data._cpu_body_coms, indices=cpu_env_ids)
@@ -2223,9 +2222,8 @@ class Articulation(BaseArticulation):
             outputs=[self._data._body_com_pose_b.data],
             device=self._device,
         )
-        # Invalidate derived buffers that depend on body_com_pose_b.
-        self.data._root_com_pose_w.timestamp = -1.0
-        self.data._body_com_pose_w.timestamp = -1.0
+        self._data._body_com_pose_b.timestamp = self._data._sim_timestamp
+        self._data._reset_body_com_pose_b_dependents()
         wp.copy(self.data._cpu_body_coms, self._data._body_com_pose_b.data)
         self._root_view.set_attribute(
             TT.BODY_COM_POSE, self.data._cpu_body_coms, mask=self._get_cpu_env_mask(env_mask_wp)
