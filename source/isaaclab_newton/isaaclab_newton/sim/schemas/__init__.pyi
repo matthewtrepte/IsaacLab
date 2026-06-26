@@ -4,6 +4,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 __all__ = [
+    "apply_mujoco_fixed_tendon",
+    "MujocoFixedTendonCfg",
     "MujocoJointDrivePropertiesCfg",
     "MujocoRigidBodyCfg",
     "MujocoRigidBodyPropertiesCfg",
@@ -18,7 +20,11 @@ __all__ = [
     "NewtonSDFCollisionPropertiesCfg",
 ]
 
+from .schemas import (
+    apply_mujoco_fixed_tendon,
+)
 from .schemas_cfg import (
+    MujocoFixedTendonCfg,
     MujocoJointDrivePropertiesCfg,
     MujocoRigidBodyCfg,
     MujocoRigidBodyPropertiesCfg,
