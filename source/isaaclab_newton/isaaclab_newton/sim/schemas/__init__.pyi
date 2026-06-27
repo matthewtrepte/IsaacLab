@@ -15,8 +15,10 @@ __all__ = [
     "NewtonDeformableBodyPropertiesCfg",
     "NewtonJointDrivePropertiesCfg",
     "NewtonMaterialPropertiesCfg",
+    "NewtonMeshCollisionCfg",
     "NewtonMeshCollisionPropertiesCfg",
     "NewtonRigidBodyPropertiesCfg",
+    "NewtonSDFCollisionCfg",
     "NewtonSDFCollisionPropertiesCfg",
 ]
 
@@ -34,7 +36,9 @@ from .schemas_cfg import (
     NewtonDeformableBodyPropertiesCfg,
     NewtonJointDrivePropertiesCfg,
     NewtonMaterialPropertiesCfg,
+    NewtonMeshCollisionCfg,
     NewtonMeshCollisionPropertiesCfg,
     NewtonRigidBodyPropertiesCfg,
+    NewtonSDFCollisionCfg,
     NewtonSDFCollisionPropertiesCfg,
 )
