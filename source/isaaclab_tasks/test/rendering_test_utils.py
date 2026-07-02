@@ -795,12 +795,26 @@ def rendering_test_cartpole(
 
     try:
         env = CartpoleCameraEnv(env_cfg)
+        camera_outputs = env._tiled_camera.data.output
+        if renderer == "ovrtx_renderer":
+            # The first output access creates the selected OVRTX render-variable mapping. Give
+            # it a few frames to compile and populate instead of validating its zeroed buffer.
+            for _ in range(10):
+                has_valid_outputs = all(
+                    torch.count_nonzero(output if isinstance(output, torch.Tensor) else output.torch).item() > 0
+                    for output in camera_outputs.values()
+                )
+                if has_valid_outputs:
+                    break
+                env.sim.render()
+                env.scene.update(dt=env.physics_dt)
+                camera_outputs = env._tiled_camera.data.output
         maybe_save_stage("cartpole", physics_backend, renderer, data_type)
         validate_camera_outputs(
             "cartpole",
             physics_backend,
             renderer,
-            env._tiled_camera.data.output,
+            camera_outputs,
             max_different_pixels_percentage=MAX_DIFFERENT_PIXELS_PERCENTAGE_BY_ENV_NAME["cartpole"],
             comparison_scores=comparison_scores,
         )
