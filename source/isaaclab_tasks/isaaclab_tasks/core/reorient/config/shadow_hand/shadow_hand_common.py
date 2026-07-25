@@ -139,7 +139,7 @@ class ShadowHandEventCfg(PresetCfg):
     physx = PhysxEventCfg()
     newton_mjwarp = NewtonEventCfg()
     ovphysx = physx  # OvPhysX is PhysX-based; reuse the PhysX randomization terms
-    default = newton_mjwarp
+    default = physx
     newton_kamino = newton_mjwarp
 
 
@@ -222,7 +222,7 @@ class ShadowHandRobotCfg(PresetCfg):
             joint_pos={".*": 0.0},
         ),
     )
-    default = newton_mjwarp
+    default = physx
     newton_kamino = newton_mjwarp
 
 
@@ -263,7 +263,7 @@ class ObjectCfg(PresetCfg):
         articulation_root_prim_path="",
     )
     ovphysx = physx  # OvPhysX is PhysX-based; use the rigid-body cube, not Newton's articulation
-    default = newton_mjwarp
+    default = physx
     newton_kamino = newton_mjwarp
 
 
@@ -286,7 +286,7 @@ class PhysicsCfg(PresetCfg):
         num_substeps=2,
     )
     ovphysx = OvPhysxCfg()
-    default = newton_mjwarp
+    default = physx
     newton_kamino = NewtonCfg(solver_cfg=KaminoSolverCfg(max_contacts_per_world=128))
 
 
