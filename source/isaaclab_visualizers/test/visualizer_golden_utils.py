@@ -53,7 +53,10 @@ _MAX_DIFF_PCT_OVERRIDES: dict[str, float] = {
     "anymal_d-kit-tiled": 12.0,
     "anymal_d-kit-viewport": 4.5,
     "shadow_hand-kit-tiled": 3.0,
-    "shadow_hand-kit-viewport": 2.0,
+    # Pre-renders reduced from 40 to 15 (kit modes only) to save wall-clock time under
+    # GPU throttling (~55 s/render on CI).  Gray matte surfaces accumulate slightly more
+    # per-pixel noise at lower TAA sample counts — observed up to 3.5%.
+    "shadow_hand-kit-viewport": 4.0,
     # Newton GL is deterministic on the same GPU but shows ~1–2% cross-GPU variation
     # (golden images captured on RTX PRO 4500, CI runner uses L40S).  SSIM ≥ 0.97
     # separately guards against structural regressions (wrong pose → SSIM ~0.85).
@@ -90,6 +93,13 @@ _COMPARISON_IMAGES_DIR = os.path.join(os.getcwd(), "tests", "comparison-images")
 
 # RTX variability makes golden checks flaky on CI; match the renderer test retry count.
 FLAKY_MARK = pytest.mark.flaky(max_runs=3, min_passes=1)
+
+# Warmup settings for golden image captures, reduced from integration-test defaults to keep
+# per-test-case render time bounded under GPU throttling (~55 s/frame observed on CI).
+# Newton FK sync locks body positions before the warmup loop, so fewer RTX samples only
+# affect TAA convergence speed — robot poses are never wrong-or-missing at any frame count.
+_GOLDEN_MAX_WARMUP_FRAMES = 30
+_GOLDEN_MIN_CONVERGENCE_FRAME = 5
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +381,12 @@ def run_visualizer_golden_cartpole(
             return _viz_utils._capture_visualizer_tiled_camera_rgb(_get_active_visualizer(env, viz_type))
         if viz_type == "kit":
             return _viz_utils._capture_kit_viewport_with_pose_reapply(
-                env, _get_active_visualizer(env, "kit"), physics_backend=backend, prior_physics_steps=buffer_steps
+                env,
+                _get_active_visualizer(env, "kit"),
+                physics_backend=backend,
+                prior_physics_steps=buffer_steps,
+                max_warmup_frames=_GOLDEN_MAX_WARMUP_FRAMES,
+                min_convergence_frame=_GOLDEN_MIN_CONVERGENCE_FRAME,
             )
         newton_viz = _get_active_visualizer(env, "newton")
         viewer = getattr(newton_viz, "_viewer", None)
@@ -440,6 +455,8 @@ def run_visualizer_golden_shadow_hand(
                 resolution=_viz_utils._SHADOW_HAND_KIT_INTEGRATION_RENDER_RESOLUTION,
                 physics_backend=backend,
                 prior_physics_steps=0,
+                max_warmup_frames=_GOLDEN_MAX_WARMUP_FRAMES,
+                min_convergence_frame=_GOLDEN_MIN_CONVERGENCE_FRAME,
             )
         newton_viz = _get_active_visualizer(env, "newton")
         viewer = getattr(newton_viz, "_viewer", None)
@@ -462,12 +479,13 @@ def run_visualizer_golden_shadow_hand(
 
         # Extra RTX TAA warmup passes (render-only, no physics).  Shadow hand uses 0
         # physics buffer steps, so without extra renders the gray matte surfaces show
-        # visible grain: tiled mode composes 4 independent sub-viewports each needing
-        # their own TAA convergence, requiring roughly 2× the sample count of a single
-        # viewport.  40 extra env.sim.render() calls (plus the 20 in the capture warmup
-        # loop) bring the total to ~60 and produce clean output on gray geometry.
-        for _ in range(40):
-            env.sim.render()
+        # visible grain.  Only RTX-path captures (kit visualizer) benefit; Newton GL
+        # viewport captures skip them to avoid wasting render time under GPU throttling
+        # (~55 s/render on CI).  The convergence-based warmup loop in
+        # _capture_kit_viewport_with_pose_reapply picks up remaining TAA history.
+        if visualizer_type == "kit":
+            for _ in range(15):
+                env.sim.render()
 
         frame = _capture_frame(env, visualizer_type, mode, physics_backend, actions)
 
@@ -516,6 +534,8 @@ def run_visualizer_golden_anymal_d(
                 resolution=_viz_utils._ANYMAL_D_KIT_INTEGRATION_RENDER_RESOLUTION,
                 physics_backend=backend,
                 prior_physics_steps=_viz_utils._START_BUFFER_STEPS,
+                max_warmup_frames=_GOLDEN_MAX_WARMUP_FRAMES,
+                min_convergence_frame=_GOLDEN_MIN_CONVERGENCE_FRAME,
             )
         newton_viz = _get_active_visualizer(env, "newton")
         viewer = getattr(newton_viz, "_viewer", None)

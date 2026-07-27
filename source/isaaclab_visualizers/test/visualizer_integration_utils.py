@@ -1083,6 +1083,7 @@ def _capture_kit_viewport_with_pose_reapply(
     prior_physics_steps: int = 0,
     max_warmup_frames: int | None = None,
     app_updates_only: bool = False,
+    min_convergence_frame: int = _KIT_RTX_RENDER_PRODUCT_WARMUP_STEPS,
 ) -> np.ndarray:
     """Set the configured eye/lookat, warm RTX, then capture.
 
@@ -1105,16 +1106,21 @@ def _capture_kit_viewport_with_pose_reapply(
         app_updates_only: When True, uses lightweight ``app.update()`` ticks instead
             of ``env.sim.render()``.  Required for VBD cloth scenes where
             ``env.sim.render()`` blocks in the Newton Fabric sync path.
+        min_convergence_frame: Earliest frame at which convergence is checked in the
+            Newton warmup path.  Defaults to :data:`_KIT_RTX_RENDER_PRODUCT_WARMUP_STEPS`.
+            Reduce for golden captures where body positions are locked by Newton FK sync
+            before the loop, so fewer RTX samples only affect TAA convergence speed.
     """
     kit_visualizer.set_camera_view(kit_visualizer.cfg.eye, kit_visualizer.cfg.lookat)
     camera_path = getattr(kit_visualizer, "_controlled_camera_path", None)
     assert camera_path, "KitVisualizer did not expose a controlled camera path."
     annotator, render_product = _build_rgb_annotator_for_camera(camera_path, resolution=resolution)
+    _newton_warmup_frames = max_warmup_frames if max_warmup_frames is not None else _WARMUP_MAX_FRAMES
     try:
         if physics_backend == "newton":
             _drain_until_newton_fabric_ready()
             prev: np.ndarray | None = None
-            for i in range(_WARMUP_MAX_FRAMES):
+            for i in range(_newton_warmup_frames):
                 kit_visualizer.set_camera_view(kit_visualizer.cfg.eye, kit_visualizer.cfg.lookat)
                 env.sim.render()
                 kit_visualizer.set_camera_view(kit_visualizer.cfg.eye, kit_visualizer.cfg.lookat)
@@ -1127,7 +1133,7 @@ def _capture_kit_viewport_with_pose_reapply(
                 if curr.shape[:2] == (1, 1):
                     prev = None
                     continue
-                if i >= _KIT_RTX_RENDER_PRODUCT_WARMUP_STEPS and prev is not None and _frames_converged(prev, curr):
+                if i >= min_convergence_frame and prev is not None and _frames_converged(prev, curr):
                     break
                 prev = curr
         else:
@@ -1137,6 +1143,7 @@ def _capture_kit_viewport_with_pose_reapply(
                 use_convergence=True,
                 max_frames_override=max_warmup_frames,
                 app_updates_only=app_updates_only,
+                min_convergence_frame=min_convergence_frame,
             )
         return _capture_kit_viewport_rgb(annotator)
     finally:
@@ -1151,6 +1158,7 @@ def _warm_kit_rtx_render_product(
     use_convergence: bool = False,
     max_frames_override: int | None = None,
     app_updates_only: bool = False,
+    min_convergence_frame: int = _KIT_RTX_RENDER_PRODUCT_WARMUP_STEPS,
 ) -> None:
     """Pump Kit/RTX until the annotator produces stable frames.
 
@@ -1163,6 +1171,8 @@ def _warm_kit_rtx_render_product(
     When ``app_updates_only`` is True, replaces ``env.sim.render()`` with lightweight
     ``app.update()`` calls.  Use this for VBD cloth scenes where ``env.sim.render()``
     blocks in the Newton Fabric sync path (VBD cloth particles never set the ready flag).
+    ``min_convergence_frame`` sets the earliest frame at which convergence is checked;
+    reduce for golden captures to allow earlier exit under GPU throttling.
     """
     if max_frames_override is not None:
         max_frames = max_frames_override
@@ -1179,12 +1189,7 @@ def _warm_kit_rtx_render_product(
         if curr.shape[:2] == (1, 1):
             prev = None
             continue
-        if (
-            use_convergence
-            and i >= _KIT_RTX_RENDER_PRODUCT_WARMUP_STEPS
-            and prev is not None
-            and _frames_converged(prev, curr)
-        ):
+        if use_convergence and i >= min_convergence_frame and prev is not None and _frames_converged(prev, curr):
             return
         prev = curr
 
