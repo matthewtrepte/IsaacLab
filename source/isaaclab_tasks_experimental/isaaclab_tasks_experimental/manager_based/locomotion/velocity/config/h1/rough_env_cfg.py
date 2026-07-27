@@ -17,7 +17,7 @@ from isaaclab_tasks_experimental.manager_based.locomotion.velocity.velocity_env_
 ##
 # Pre-defined configs
 ##
-from isaaclab_assets import H1_MINIMAL_CFG  # isort: skip
+from isaaclab_assets import H1_MINIMAL_CFG, H1_NEWTON_MINIMAL_CFG  # isort: skip
 
 
 @configclass
@@ -75,7 +75,11 @@ class H1RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
-        self.scene.robot = H1_MINIMAL_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        import sys
+
+        _is_newton = any("newton" in a.lower() for a in sys.argv if a.startswith("presets="))
+        robot_cfg = H1_NEWTON_MINIMAL_CFG if _is_newton else H1_MINIMAL_CFG
+        self.scene.robot = robot_cfg.replace(prim_path="{ENV_REGEX_NS}/Robot")
         self.events.push_robot = None
         self.events.reset_robot_joints.params["position_range"] = (1.0, 1.0)
         self.events.base_external_force_torque.params["asset_cfg"].body_names = [".*torso_link"]
