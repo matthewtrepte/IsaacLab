@@ -1701,17 +1701,12 @@ _FRANKA_CLOTH_VISUALIZER_TILED_CAMERA_TARGET_PRIM_PATH = "/World/envs/*/Robot"
 """Franka robot prim followed by generated tiled cameras (stable reference near the cloth)."""
 
 _FRANKA_CLOTH_WARMUP_STEPS = 1
-"""Physics steps after reset before capturing franka cloth — applies to Kit visualizer modes only.
+"""Physics steps after reset before capturing franka cloth in Kit visualizer modes.
 
-The Kit viewport reads body positions from USD Fabric; at 0 steps Newton has not yet
-propagated articulation FK to Fabric, leaving arm links at the origin and invisible.
-One step triggers Newton's forward pass so every link appears at its correct position.
-
-Newton visualizer modes (``newton-tiled``, ``newton-viewport``) read from ``state_0``
-directly and do not need Fabric sync.  Those modes use 0 steps in
-:func:`~visualizer_golden_utils.run_visualizer_golden_franka_cloth` so the cloth is
-captured at the deterministic reset pose — the VBD parallel-reduction ordering is
-non-deterministic and can produce 30–60 % pixel diffs after even a single step.
+Kit reads body positions from USD Fabric; one step propagates Newton FK so arm links
+appear at the correct positions.  Newton visualizer modes use 0 steps instead (they
+read from ``state_0`` directly), capturing the cloth at its deterministic reset pose
+to avoid VBD parallel-reduction non-determinism that accumulates after even one step.
 """
 
 
