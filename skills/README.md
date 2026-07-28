@@ -9,7 +9,6 @@ Developer skills:
 - `developer/pr-workflow/`: prepare changes for review using Isaac Lab's PR, commit, changelog, and validation conventions.
 - `developer/changelog-fragments/`: add and validate package changelog fragments.
 - `developer/coding-style/`: apply Isaac Lab coding style, API design, docstring, type-hint, lazy export, and contribution conventions.
-- `developer/regen-golden-images/`: regenerate visualizer and renderer golden images when a feature or quality change intentionally alters rendered output.
 
 User skills:
 
