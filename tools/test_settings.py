@@ -54,12 +54,9 @@ PER_TEST_TIMEOUTS = {
     "test_skrl_wrapper.py": 1000,
     "test_action_state_recorder_term.py": 1000,
     "test_manager_based_rl_env_obs_spaces_task_integration.py": 1000,
-    # 16 parametrized cases × up to ~30 RTX render frames at ~55 s/frame under GPU
-    # throttling.  shadow_hand pre-renders capped at 15 (kit modes only); convergence
-    # checked from frame 5.  cold-cache buffer (+700 s) added for first camera-enabled test.
-    "test_visualizer_golden_newton.py": 7500,
-    # 12 parametrized cases (no franka_cloth); same per-frame budget concern as newton.
-    "test_visualizer_golden_physx.py": 5000,
+    "test_visualizer_golden_newton.py": 7500,  # 16 cases × up to ~30 RTX frames at ~55 s/frame
+    "test_visualizer_golden_physx.py": 5000,   # 12 cases (no franka_cloth)
+
     "test_visuotactile_sensor.py": 1000,
     "test_visuotactile_render.py": 1000,
     "test_rigid_object_collection.py": 1500,

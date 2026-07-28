@@ -358,10 +358,7 @@ class NewtonManager(PhysicsManager):
     _cubric_adapter: int | None = None
     _cubric_bound_fabric_id: int | None = None
 
-    # Set to True after sync_transforms_to_usd() successfully writes body positions for
-    # the first time in each simulation session.  Reset to False in clear().  Polled by
-    # test drain helpers to know when the GPU has propagated the newton:index Fabric
-    # attribute and body_q values are valid.
+    # True once sync_transforms_to_usd() has written body positions successfully; reset in clear().
     _newton_fabric_ready: bool = False
 
     # Model changes (callbacks use unified system from PhysicsManager)
@@ -576,10 +573,7 @@ class NewtonManager(PhysicsManager):
                     device=str(PhysicsManager._device),
                 )
                 if selection.GetCount() == 0:
-                    # The newton:index attribute is written CPU-side by start_simulation() but
-                    # GPU propagation is deferred.  Keep _transforms_dirty=True so the next
-                    # pre_render() retries once initialize_solver() has completed (FK delegate
-                    # bound) and body_q holds valid values.
+                    # newton:index is CPU-written but GPU-propagated; retry once FK is bound.
                     if cls._eval_fk is _eval_fk_unbound:
                         NewtonManager._transforms_dirty = False
                     return
@@ -2379,8 +2373,7 @@ class NewtonManager(PhysicsManager):
 
         if cls._scene_data is None:
             cls._scene_data = SceneDataFormat.Transform()
-        # Invalidate stale mapping when the model's body count changed (e.g. tiled → viewport
-        # test within the same process where _model was rebuilt from a different stage).
+        # Invalidate stale mapping when body count changes between sequential tests in-process.
         if cls._scene_data_mapping is not None and cls._scene_data_mapping.shape[0] != cls._model.body_count:
             cls._scene_data_mapping = None
         if cls._scene_data_mapping is None:
