@@ -55,8 +55,7 @@ PER_TEST_TIMEOUTS = {
     "test_action_state_recorder_term.py": 1000,
     "test_manager_based_rl_env_obs_spaces_task_integration.py": 1000,
     "test_visualizer_golden_newton.py": 7500,  # 16 cases × up to ~30 RTX frames at ~55 s/frame
-    "test_visualizer_golden_physx.py": 5000,   # 12 cases (no franka_cloth)
-
+    "test_visualizer_golden_physx.py": 5000,  # 12 cases (no franka_cloth)
     "test_visuotactile_sensor.py": 1000,
     "test_visuotactile_render.py": 1000,
     "test_rigid_object_collection.py": 1500,
