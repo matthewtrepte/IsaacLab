@@ -637,7 +637,12 @@ def run_visualizer_golden_franka_cloth(
         configure_seed(42, torch_deterministic=True)
         env.reset()
 
-        for _ in range(_viz_utils._FRANKA_CLOTH_WARMUP_STEPS):
+        # Newton visualizer reads body positions from state_0 directly (not USD Fabric),
+        # so FK is already correct at reset — 0 physics steps gives a fully deterministic
+        # cloth pose.  Kit visualizer needs ≥1 step to propagate FK to USD Fabric (at 0
+        # steps the arm links remain at the origin in the Kit viewport).
+        n_warmup = 0 if visualizer_type == "newton" else _viz_utils._FRANKA_CLOTH_WARMUP_STEPS
+        for _ in range(n_warmup):
             env.step(action=actions)
 
         frame = _capture_frame(env, visualizer_type, mode, actions)

@@ -1701,16 +1701,17 @@ _FRANKA_CLOTH_VISUALIZER_TILED_CAMERA_TARGET_PRIM_PATH = "/World/envs/*/Robot"
 """Franka robot prim followed by generated tiled cameras (stable reference near the cloth)."""
 
 _FRANKA_CLOTH_WARMUP_STEPS = 1
-"""Steps after reset before capturing the franka cloth scene.
+"""Physics steps after reset before capturing franka cloth — applies to Kit visualizer modes only.
 
-One step lets Newton propagate articulation FK so all robot arm links are visible at the
-correct positions.  At 0 steps, Newton has not yet synced body positions to USD Fabric,
-leaving the arm links at the origin and invisible in the Kit viewport.  One step also lets
-the cloth begin falling under gravity while remaining in a nearly-deterministic pose — the
-VBD solver's non-deterministic parallel reductions accumulate over many steps, so capturing
-at 1 step keeps inter-run pixel variance much lower than at 20 steps.
-This mirrors the approach used in the kitless rendering tests in
-``source/isaaclab_tasks/test/rendering_test_utils.py``.
+The Kit viewport reads body positions from USD Fabric; at 0 steps Newton has not yet
+propagated articulation FK to Fabric, leaving arm links at the origin and invisible.
+One step triggers Newton's forward pass so every link appears at its correct position.
+
+Newton visualizer modes (``newton-tiled``, ``newton-viewport``) read from ``state_0``
+directly and do not need Fabric sync.  Those modes use 0 steps in
+:func:`~visualizer_golden_utils.run_visualizer_golden_franka_cloth` so the cloth is
+captured at the deterministic reset pose — the VBD parallel-reduction ordering is
+non-deterministic and can produce 30–60 % pixel diffs after even a single step.
 """
 
 
