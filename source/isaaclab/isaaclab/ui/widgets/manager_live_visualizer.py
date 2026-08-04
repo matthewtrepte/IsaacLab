@@ -73,6 +73,7 @@ class ManagerLiveVisualizer(UiVisualizerBase):
         self._vis_frame: omni.ui.Frame
         self._vis_window: omni.ui.Window
         self._live_plots: ManagerLivePlots | None = None
+        self._debug_vis_handle = None
 
         # evaluate chosen terms if no terms provided use all available.
         self.term_names = []

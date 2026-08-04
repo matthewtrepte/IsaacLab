@@ -59,6 +59,13 @@ if args_cli.physics == "newton_mjwarp":
         args_cli.visualizer = ["newton"]
     elif "kit" in (args_cli.visualizer or []):
         parser.error("the Kit visualizer is not supported with Newton physics; select newton, rerun, viser, or none")
+else:
+    # Rerun visualizer requires Newton physics (it uses NewtonManager for model/state data).
+    if getattr(args_cli, "visualizer_explicit", False) and "rerun" in (args_cli.visualizer or []):
+        parser.error(
+            "the Rerun visualizer requires Newton physics (--physics newton_mjwarp); "
+            "remove 'rerun' from --viz or switch to --physics newton_mjwarp"
+        )
 
 import random
 
@@ -109,6 +116,10 @@ RAY_CASTER_MARKER_CFG = VisualizationMarkersCfg(
 def _create_visualizer_cfgs():
     """Create demo-specific visualizer configs for requested backends."""
     if "rerun" not in (args_cli.visualizer or []):
+        return []
+    # Rerun requires Newton physics; the parser.error() above guards explicit requests, but
+    # guard here too for safety in case the function is called from other code paths.
+    if args_cli.physics != "newton_mjwarp":
         return []
 
     from isaaclab_visualizers.rerun import RerunVisualizerCfg

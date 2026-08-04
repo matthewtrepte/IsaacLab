@@ -574,14 +574,11 @@ class LiveLinePlot(UIWidgetWrapper):
     def _rescale_btn_pressed(self):
         """Autoscale the y-axis to the current data."""
         if any(self._series_visible):
-            y_min = np.round(
-                min([min(y) for idx, y in enumerate(self._y_data) if self._series_visible[idx]]),
-                4,
-            )
-            y_max = np.round(
-                max([max(y) for idx, y in enumerate(self._y_data) if self._series_visible[idx]]),
-                4,
-            )
+            visible_non_empty = [y for idx, y in enumerate(self._y_data) if self._series_visible[idx] and len(y) > 0]
+            if not visible_non_empty:
+                return
+            y_min = np.round(min(min(y) for y in visible_non_empty), 4)
+            y_max = np.round(max(max(y) for y in visible_non_empty), 4)
             if y_min == y_max:
                 y_max += 1e-4  # Make sure axes don't collapse
 
