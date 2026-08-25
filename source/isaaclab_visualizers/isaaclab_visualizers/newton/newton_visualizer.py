@@ -1747,13 +1747,70 @@ class NewtonGLVisualizer(NewtonVisualizer):
                     entry.window_initialized = False
 
     def _create_viewer(self, runtime_headless: bool, metadata: dict) -> NewtonViewerGL:
-        return NewtonViewerGL(
-            width=self.cfg.window_width,
-            height=self.cfg.window_height,
-            headless=runtime_headless,
-            metadata=metadata,
-            update_frequency=self.cfg.update_frequency,
-        )
+        # On Linux/macOS, pyglet.window.Window() always attempts an X/Wayland display
+        # connection — even with visible=False.  The only way to suppress that connection
+        # is pyglet.options["headless"] = True (switches to EGL).  The module-level check
+        # above sets this flag when DISPLAY is absent at *import* time, but if DISPLAY was
+        # set then and is gone by the time _create_viewer() is called (e.g. Xvfb died in
+        # CI), runtime_headless=True without the option results in "Cannot connect to None".
+        # Synchronise the option with the runtime headless state here so the flag is always
+        # correct regardless of when the module was first imported.
+        if runtime_headless and sys.platform not in ("win32", "darwin"):
+            import pyglet
+
+            pyglet.options["headless"] = True
+
+        try:
+            return NewtonViewerGL(
+                width=self.cfg.window_width,
+                height=self.cfg.window_height,
+                headless=runtime_headless,
+                metadata=metadata,
+                update_frequency=self.cfg.update_frequency,
+            )
+        except Exception as exc:
+            exc_str = str(exc)
+
+            # On Linux, DISPLAY may point to a server that doesn't exist (common in CI
+            # with Xvfb not running).  pyglet.window.Window always opens the X connection
+            # even with visible=False, so "Cannot connect to ..." surfaces even when the
+            # proactive headless guard above didn't fire (DISPLAY was set → runtime_headless
+            # came out False).  Retry with the EGL off-screen backend, which requires no
+            # display server.  pyglet.options["headless"] is evaluated at Window
+            # construction time so setting it here takes effect on the retry.
+            if sys.platform not in ("win32", "darwin") and "Cannot connect to" in exc_str:
+                import pyglet
+
+                if not pyglet.options.get("headless"):
+                    logger.warning(
+                        "newton_gl: cannot connect to X display (%s). "
+                        "Retrying with EGL off-screen (headless) backend.",
+                        exc,
+                    )
+                    pyglet.options["headless"] = True
+                    return NewtonViewerGL(
+                        width=self.cfg.window_width,
+                        height=self.cfg.window_height,
+                        headless=True,
+                        metadata=metadata,
+                        update_frequency=self.cfg.update_frequency,
+                    )
+
+            # On Windows, the GPU driver may not export OpenGL 2.0 entry points such as
+            # glCreateShader — a regression observed on Blackwell GPUs with driver 595.97
+            # under Isaac Sim 6.1.  Re-raise with an actionable hint so the user knows to
+            # switch to the RTX backend.
+            if sys.platform == "win32" and any(
+                kw in exc_str for kw in ("glCreateShader", "OpenGL 2.0", "not exported by")
+            ):
+                raise RuntimeError(
+                    f"{exc}\n"
+                    "The Windows OpenGL driver does not export the required OpenGL 2.0 entry\n"
+                    "points. As a workaround, use '--visualizer newton_rtx' for path-traced\n"
+                    "rendering, which does not require a legacy OpenGL context."
+                ) from exc
+
+            raise
 
     def supports_live_plots(self) -> bool:
         """Newton GL supports live scalar/array plots via the ImGui sidebar."""
