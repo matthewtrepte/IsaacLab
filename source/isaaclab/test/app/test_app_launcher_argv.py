@@ -12,6 +12,20 @@ import pytest
 from isaaclab.app.app_launcher import AppLauncher, _sanitize_sys_argv_for_kit
 from isaaclab.utils.renderers import ISAAC_RTX_SHOW_ALL_PARTITIONS_BY_DEFAULT_SETTING
 
+# ─── helpers ──────────────────────────────────────────────────────────────────
+
+
+def _resolve_livestream_args(env_livestream: int, monkeypatch) -> list[str]:
+    """Return the Kit args produced by _resolve_livestream_settings for a given LIVESTREAM value.
+
+    PUBLIC_IP is left untouched so callers can set it before calling this helper.
+    """
+    monkeypatch.setattr(sys, "argv", ["script.py"])
+    monkeypatch.setenv("LIVESTREAM", str(env_livestream))
+    launcher = AppLauncher.__new__(AppLauncher)
+    AppLauncher._resolve_livestream_settings(launcher, {"livestream": -1})
+    return list(launcher._livestream_args)
+
 
 def test_sanitize_sys_argv_removes_trailing_pytest_verbosity(monkeypatch):
     """Remove a pytest verbosity flag even when it is the final argument."""
@@ -139,3 +153,65 @@ def test_explicit_spectator_setting_overrides_visualizer_default(monkeypatch):
 
     assert explicit_arg in launcher._kit_args
     assert f"--{ISAAC_RTX_SHOW_ALL_PARTITIONS_BY_DEFAULT_SETTING}=true" not in launcher._kit_args
+
+
+# ─── livestream settings ───────────────────────────────────────────────────────
+
+_REQUIRED_NVST_SETTINGS = {
+    "--/exts/omni.kit.livestream.app/primaryStream/signalPort=49100",
+    "--/exts/omni.kit.livestream.app/primaryStream/streamPort=47998",
+    "--/exts/omni.kit.livestream.app/primaryStream/allowDynamicResize=true",
+    "--/exts/omni.kit.livestream.app/primaryStream/streamType=webrtc",
+    "--/app/livestream/allowResize=true",
+}
+
+
+def test_livestream_disabled_produces_no_args(monkeypatch):
+    """LIVESTREAM=0 must not inject any Kit args."""
+    assert _resolve_livestream_args(0, monkeypatch) == []
+
+
+@pytest.mark.parametrize("mode", [1, 2])
+def test_livestream_enables_extension(mode, monkeypatch):
+    """Both LIVESTREAM=1 and LIVESTREAM=2 must enable omni.kit.livestream.app."""
+    args = _resolve_livestream_args(mode, monkeypatch)
+    assert "--enable" in args
+    assert "omni.kit.livestream.app" in args
+
+
+@pytest.mark.parametrize("mode", [1, 2])
+def test_livestream_sets_nvst_required_settings(mode, monkeypatch):
+    """LIVESTREAM=1 and LIVESTREAM=2 must both set all NVST settings.
+
+    Missing settings cause the following errors on Windows 11 (NVBug 6281418):
+    * signalPort/streamPort absent  -> NVST_R_INTERNAL_ERROR, server fails to bind
+    * streamType absent             -> NVST_R_INVALID_OPERATION, primary stream server
+                                       fails to start
+    * allowDynamicResize=false (default) -> NVST_R_BUSY on any OS-initiated resize
+    * app.livestream.allowResize absent  -> NVST_R_BUSY because the app window can still
+                                            be resized by the OS even in headless mode,
+                                            causing a framebuffer resolution mismatch
+    """
+    args = _resolve_livestream_args(mode, monkeypatch)
+    missing = _REQUIRED_NVST_SETTINGS - set(args)
+    assert not missing, f"LIVESTREAM={mode}: missing Kit args: {missing}"
+
+
+def test_livestream_1_sets_public_ip(monkeypatch):
+    """LIVESTREAM=1 (public WebRTC) must set publicIp from PUBLIC_IP env var."""
+    monkeypatch.setenv("PUBLIC_IP", "1.2.3.4")
+    args = _resolve_livestream_args(1, monkeypatch)
+    assert "--/exts/omni.kit.livestream.app/primaryStream/publicIp=1.2.3.4" in args
+
+
+def test_livestream_1_defaults_public_ip_to_localhost(monkeypatch):
+    """LIVESTREAM=1 defaults publicIp to 127.0.0.1 when PUBLIC_IP is unset."""
+    monkeypatch.delenv("PUBLIC_IP", raising=False)
+    args = _resolve_livestream_args(1, monkeypatch)
+    assert "--/exts/omni.kit.livestream.app/primaryStream/publicIp=127.0.0.1" in args
+
+
+def test_livestream_2_does_not_set_public_ip(monkeypatch):
+    """LIVESTREAM=2 (private WebRTC) must not set publicIp (private network binding)."""
+    args = _resolve_livestream_args(2, monkeypatch)
+    assert not any("publicIp" in a for a in args)

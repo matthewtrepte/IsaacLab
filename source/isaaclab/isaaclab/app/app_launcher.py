@@ -853,19 +853,29 @@ class AppLauncher:
                     "--/exts/omni.kit.livestream.app/primaryStream/streamPort=47998",
                     "--/exts/omni.kit.livestream.app/primaryStream/allowDynamicResize=true",
                     "--/exts/omni.kit.livestream.app/primaryStream/streamType=webrtc",
+                    # Allow the application window (and thus the captured framebuffer) to
+                    # resize during streaming.  Without this the app resists OS-initiated
+                    # resizes, producing a resolution mismatch that triggers NVST_R_BUSY
+                    # even when allowDynamicResize is set.  Mirrors the setting in
+                    # isaacsim.exp.full.streaming.kit.
+                    "--/app/livestream/allowResize=true",
                     "--enable",
                     "omni.kit.livestream.app",
                 ]
             elif self._livestream == 2:
                 # WebRTC private network
-                # Signal/stream ports and allowDynamicResize must be set explicitly; without
-                # them NVST cannot bind its server socket (NVST_R_INTERNAL_ERROR) and any
-                # subsequent window resize after a client connects triggers NVST_R_BUSY.
+                # Signal/stream ports, streamType, and both resize flags must be set
+                # explicitly.  Without signalPort/streamPort NVST cannot bind its server
+                # socket (NVST_R_INTERNAL_ERROR / NVST_R_INVALID_OPERATION).  Without
+                # streamType the primary stream server fails to start (NVST_R_INVALID_OPERATION).
+                # Without allowDynamicResize + allowResize any OS-initiated window resize
+                # after a client connects triggers NVST_R_BUSY.
                 self._livestream_args += [
                     "--/exts/omni.kit.livestream.app/primaryStream/signalPort=49100",
                     "--/exts/omni.kit.livestream.app/primaryStream/streamPort=47998",
                     "--/exts/omni.kit.livestream.app/primaryStream/allowDynamicResize=true",
                     "--/exts/omni.kit.livestream.app/primaryStream/streamType=webrtc",
+                    "--/app/livestream/allowResize=true",
                     "--enable",
                     "omni.kit.livestream.app",
                 ]
