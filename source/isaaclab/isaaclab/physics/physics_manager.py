@@ -84,6 +84,12 @@ class PhysicsManager(ABC):
     _callbacks: ClassVar[dict[int, tuple[Any, Callable, int, str | None, Any]]] = {}
     _callback_id: ClassVar[int] = 0
 
+    supports_anim_recording: ClassVar[bool] = False
+    """Whether this backend can service ``--anim_recording_enabled`` (OVD Recorder).
+
+    Overridden by backends that implement the recorder (currently PhysX-only).
+    """
+
     @classmethod
     def register_callback(
         cls,
@@ -255,6 +261,16 @@ class PhysicsManager(ABC):
         PhysicsManager._cfg = sim_context.cfg.physics
         PhysicsManager._device = sim_context.cfg.device
         PhysicsManager._sim_time = 0.0
+
+        # The OVD Recorder (omni.physx.pvd) only records PhysX simulations. On other backends the
+        # recording would silently never start, so the process would run until manually killed
+        # instead of stopping at `--anim_recording_stop_time` and saving the animation.
+        if sim_context.get_setting("/isaaclab/anim_recording/enabled") and not cls.supports_anim_recording:
+            raise ValueError(
+                f"'--anim_recording_enabled' was set, but the active physics backend ('{cls.__name__}') does not"
+                " support the OVD Recorder. Select the PhysX backend, e.g. by appending"
+                " 'physics=isaacsim_physx' to the command line."
+            )
 
     @classmethod
     @abstractmethod

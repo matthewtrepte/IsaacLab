@@ -243,6 +243,8 @@ class PhysxManager(PhysicsManager):
 
     _cfg: ClassVar[PhysxCfg | None] = None
 
+    supports_anim_recording: ClassVar[bool] = True
+
     _timeline: ClassVar[omni.timeline.ITimeline] = omni.timeline.get_timeline_interface()
     _event_bus: ClassVar[carb.eventdispatcher.IEventDispatcher] = carb.eventdispatcher.get_eventdispatcher()
     _physx: ClassVar[omni.physx.IPhysx] = omni.physx.get_physx_interface()
