@@ -104,13 +104,25 @@ def cmd_fetch_lab(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
-def inspect_usd(path: str) -> dict:
+def inspect_usd(path: str, variants: dict[str, str] | None = None) -> dict:
     """Return a JSON-serializable summary of the articulation structure of ``path``."""
     from pxr import Usd, UsdGeom, UsdPhysics
 
     stage = Usd.Stage.Open(path)
     if stage is None:
         raise FileNotFoundError(path)
+    default_prim = stage.GetDefaultPrim()
+    available_variants = {}
+    if default_prim:
+        variant_sets = default_prim.GetVariantSets()
+        for name in variant_sets.GetNames():
+            variant_set = variant_sets.GetVariantSet(name)
+            if variants and name in variants:
+                variant_set.SetVariantSelection(variants[name])
+            available_variants[name] = {
+                "selected": variant_set.GetVariantSelection(),
+                "choices": variant_set.GetVariantNames(),
+            }
 
     links, joints, articulation_roots = [], [], []
     collider_count = disabled_colliders = mesh_count = instanceable = 0
@@ -144,7 +156,11 @@ def inspect_usd(path: str) -> dict:
                 "body1": body1,
             }
             if prim.IsA(UsdPhysics.RevoluteJoint) or prim.IsA(UsdPhysics.PrismaticJoint):
-                typed = UsdPhysics.RevoluteJoint(prim) if prim.IsA(UsdPhysics.RevoluteJoint) else UsdPhysics.PrismaticJoint(prim)
+                typed = (
+                    UsdPhysics.RevoluteJoint(prim)
+                    if prim.IsA(UsdPhysics.RevoluteJoint)
+                    else UsdPhysics.PrismaticJoint(prim)
+                )
                 entry["lower"] = typed.GetLowerLimitAttr().Get()
                 entry["upper"] = typed.GetUpperLimitAttr().Get()
             joints.append(entry)
@@ -152,6 +168,7 @@ def inspect_usd(path: str) -> dict:
     masses = [link["mass"] for link in links if link["mass"] is not None]
     return {
         "path": path,
+        "variants": available_variants,
         "default_prim": str(stage.GetDefaultPrim().GetPath()) if stage.GetDefaultPrim() else None,
         "up_axis": str(UsdGeom.GetStageUpAxis(stage)),
         "meters_per_unit": UsdGeom.GetStageMetersPerUnit(stage),
@@ -167,15 +184,33 @@ def inspect_usd(path: str) -> dict:
     }
 
 
+def cmd_wrap(args: argparse.Namespace) -> int:
+    """Author a USD that references usd and pre-selects variants, so no task config change is needed."""
+    from pxr import Usd
+
+    source = Usd.Stage.Open(args.usd)
+    default_prim = source.GetDefaultPrim()
+    stage = Usd.Stage.CreateNew(args.out)
+    prim = stage.DefinePrim(f"/{default_prim.GetName()}")
+    prim.GetReferences().AddReference(str(Path(args.usd).resolve()))
+    stage.SetDefaultPrim(prim)
+    for item in args.variant:
+        name, value = item.split("=", 1)
+        prim.GetVariantSets().GetVariantSet(name).SetVariantSelection(value)
+    stage.GetRootLayer().Save()
+    print(f"Wrote {args.out} ({len(args.variant)} variant selections)")
+    return 0
+
+
 def cmd_inspect(args: argparse.Namespace) -> int:
-    summary = inspect_usd(args.usd)
+    summary = inspect_usd(args.usd, dict(item.split("=", 1) for item in args.variant or []))
     text = json.dumps(summary, indent=2)
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.out).write_text(text)
     print(
         f"{args.usd}\n  links={len(summary['links'])} joints={len(summary['joints'])} "
-        f"mass={summary['total_mass']} colliders={summary['collider_count']} meshes={summary['mesh_count']}"
+        f"variants={summary['variants']}\n  mass={summary['total_mass']} colliders={summary['collider_count']} meshes={summary['mesh_count']}"
     )
     return 0
 
@@ -221,7 +256,9 @@ def diff_structures(a: dict, b: dict) -> dict:
     for key in ("total_mass", "collider_count", "mesh_count", "meters_per_unit", "up_axis", "instanceable_prims"):
         result[key] = {"a": a[key], "b": b[key], "equal": a[key] == b[key]}
     result["compatible_names"] = not (
-        result["links"]["only_in_a"] or result["joints"]["only_in_a"] or result["links"]["probable_renames"]
+        result["links"]["only_in_a"]
+        or result["joints"]["only_in_a"]
+        or result["links"]["probable_renames"]
         or result["joints"]["probable_renames"]
     )
     return result
@@ -331,7 +368,10 @@ def _stats(values: list) -> tuple[float, float] | None:
 def format_report(arms: dict[str, list[dict]]) -> str:
     names = sorted(arms)
     kpis = list(next(iter(arms.values()))[0]) if arms else []
-    lines = ["| KPI | " + " | ".join(f"{n} (n={len(arms[n])})" for n in names) + " | B vs A |", "|---|" + "---|" * (len(names) + 1)]
+    lines = [
+        "| KPI | " + " | ".join(f"{n} (n={len(arms[n])})" for n in names) + " | B vs A |",
+        "|---|" + "---|" * (len(names) + 1),
+    ]
     for kpi in kpis:
         cells, means = [], {}
         for name in names:
@@ -376,8 +416,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", required=True)
     p.set_defaults(func=cmd_fetch_lab)
 
+    p = sub.add_parser("wrap", help="Author a USD that references an asset with variants pre-selected.")
+    p.add_argument("usd")
+    p.add_argument("--variant", action="append", required=True, metavar="SET=VALUE")
+    p.add_argument("--out", required=True)
+    p.set_defaults(func=cmd_wrap)
+
     p = sub.add_parser("inspect", help="Dump the articulation structure of a USD file.")
     p.add_argument("usd")
+    p.add_argument("--variant", action="append", metavar="SET=VALUE", help="Select a variant before inspecting.")
     p.add_argument("--out")
     p.set_defaults(func=cmd_inspect)
 
