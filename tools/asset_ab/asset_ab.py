@@ -210,7 +210,8 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         Path(args.out).write_text(text)
     print(
         f"{args.usd}\n  links={len(summary['links'])} joints={len(summary['joints'])} "
-        f"variants={summary['variants']}\n  mass={summary['total_mass']} colliders={summary['collider_count']} meshes={summary['mesh_count']}"
+        f"variants={summary['variants']}\n"
+        f"  mass={summary['total_mass']} colliders={summary['collider_count']} meshes={summary['mesh_count']}"
     )
     return 0
 
