@@ -6,8 +6,8 @@
 """Minimal pieces the Isaac Sim 7 viewer host needs from a world that Isaac Lab drives.
 
 The host's panes read and write the world through a simulation handle and show time from a clock. Here neither runs a
-scheduler: :class:`HostData` reads the shared stage and writes at Isaac Lab's open ordinal, :class:`HostClock` reports
-Isaac Lab's simulation time, and Isaac Lab drains the host's command queues itself once per frame through a
+scheduler: :class:`HostData` reads Isaac Lab's scene stage and writes at Isaac Lab's open ordinal, :class:`HostClock`
+reports Isaac Lab's simulation time, and Isaac Lab drains the host's command queues itself once per frame through a
 :class:`StageView`.
 """
 
@@ -43,7 +43,7 @@ def _as_list(paths: Any) -> list[str]:
 
 
 class HostData:
-    """The simulation handle the host's services use: reads of the shared stage, writes at the owner's ordinal.
+    """The simulation handle the host's services use: reads of the scene stage, writes at the owner's ordinal.
 
     Args:
         context: The host's stage context, used for sealed reads (an ``isaacsim.context.usd.UsdContext``).
@@ -172,7 +172,7 @@ class StageView:
 class CloneAuthoring:
     """Authoring session that describes cloned prims by their source prim.
 
-    Isaac Lab clones environments in the shared stage only, so the host's authored stage holds just the source of each
+    Isaac Lab clones environments in its scene stage only, so the host's authored stage holds just the source of each
     clone. Without this, a cloned prim's property fields have no declared types. Clones are described read-only: an
     authored edit would land on the source prim.
 
@@ -213,7 +213,7 @@ class CloneAuthoring:
 
 
 def live_inspection_type() -> type:
-    """Return a property inspection that reads live world poses from the shared stage.
+    """Return a property inspection that reads live world poses from the scene stage.
 
     Isaac Sim's inspection composes poses with native helpers that need a native simulation view, and reads velocities
     through Isaac Sim physics views. Neither exists when Isaac Lab drives the world, so this one reads the stage's world
