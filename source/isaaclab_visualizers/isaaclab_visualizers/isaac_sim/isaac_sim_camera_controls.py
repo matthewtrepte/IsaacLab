@@ -7,8 +7,10 @@
 
 The Isaac Sim client binds its camera as Kit does: Alt+left-drag orbits, middle-drag pans and right-drag looks, while a
 plain left-drag selects. Isaac Lab's Newton viewer looks with the left button and orbits with the middle one. The
-client has no setting for its bindings, so this serves a copy of its shared renderer with the bindings in
-``panes/viewport-camera.js`` changed:
+client has no setting for its bindings, so this builds a copy of the installed client (its Electron shell and shared
+renderer) with the bindings in ``panes/viewport-camera.js`` changed. The host serves the copy's renderer to browsers,
+and the desktop window starts from the copy, because Electron loads the renderer from its own files rather than from
+the host:
 
 * Left-drag looks; a left click without dragging still selects, and Shift, Ctrl or Cmd with the left button still
   select by region. Alt+left-drag still orbits.
@@ -78,17 +80,17 @@ _PATCHES = (
 )
 
 
-def newton_controls_client(shared_renderer: Path, directory: Path) -> Path | None:
-    """Copy the client's shared renderer into ``directory`` with Newton-viewer camera bindings.
+def newton_controls_client(client: Path, directory: Path) -> Path | None:
+    """Copy the installed client into ``directory`` with Newton-viewer camera bindings.
 
     Args:
-        shared_renderer: The installed client's shared renderer directory.
+        client: The installed client directory, holding ``electron/`` and ``renderer/``.
         directory: Empty directory to write the copy into.
 
     Returns:
-        The patched renderer directory, or ``None`` if this client version does not match the expected bindings.
+        The patched client directory, or ``None`` if this client version does not match the expected bindings.
     """
-    module = shared_renderer / _CAMERA_MODULE
+    module = client / "renderer" / _CAMERA_MODULE
     patched = module.read_text() if module.is_file() else ""
     for old, new in _PATCHES:
         if patched.count(old) != 1:
@@ -98,7 +100,7 @@ def newton_controls_client(shared_renderer: Path, directory: Path) -> Path | Non
             )
             return None
         patched = patched.replace(old, new)
-    target = directory / "renderer"
-    shutil.copytree(shared_renderer, target)
-    (target / _CAMERA_MODULE).write_text(patched)
+    target = directory / "client"
+    shutil.copytree(client, target)
+    (target / "renderer" / _CAMERA_MODULE).write_text(patched)
     return target

@@ -12,6 +12,7 @@ import logging
 import os
 import tempfile
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -61,6 +62,8 @@ class IsaacSimVisualizer(BaseVisualizer):
         self._host = None
         self._desktop = None
         self._opener = None
+        self._client: Path | None = None
+        """Patched copy of the Isaac Sim client the viewer starts, or ``None`` for the installed one."""
         self._viewports: dict[str, ImageView] = {}
         """Viewer camera image view per host render product."""
         self._shown: set[str] = set()
@@ -164,13 +167,17 @@ class IsaacSimVisualizer(BaseVisualizer):
         if self.backend_cfg.app_client_root is not None:
             client_roots = [("/app/", Path(self.backend_cfg.app_client_root) / "renderer"), *client_roots[1:]]
         if self.backend_cfg.camera_controls == "newton":
+            from isaacsim.application.client.impl.launch import client_directory
+
             from .isaac_sim_camera_controls import newton_controls_client
 
-            client = Path(self._resources.enter_context(tempfile.TemporaryDirectory(prefix="isaaclab_client_")))
-            client_roots = [
-                (prefix, newton_controls_client(root, client) or root) if prefix == "/" else (prefix, root)
-                for prefix, root in client_roots
-            ]
+            copy = Path(self._resources.enter_context(tempfile.TemporaryDirectory(prefix="isaaclab_client_")))
+            self._client = newton_controls_client(client_directory(), copy)
+            if self._client is not None:
+                client_roots = [
+                    (prefix, self._client / "renderer") if prefix == "/" else (prefix, root)
+                    for prefix, root in client_roots
+                ]
 
         def viewport(index: int) -> ViewportSpec:
             if index >= len(specs):
@@ -209,12 +216,19 @@ class IsaacSimVisualizer(BaseVisualizer):
 
     def _open_desktop(self) -> None:
         """Open the Electron window attached to the host that this process runs."""
-        from isaacsim.application.client import start_desktop
+        from unittest import mock
 
-        self._desktop = start_desktop(
-            Path(self.backend_cfg.app_client_root) / "main.cjs",
-            environment={"SIM_VIEWER_ATTACH_URL": self._host.url, "SIM_VIEWER_ATTACH_TOKEN": self._host.token},
-        )
+        from isaacsim.application.client import start_desktop
+        from isaacsim.application.client.impl import launch
+
+        # Electron loads the renderer from the client it starts from, not from the host, so a patched client (camera
+        # controls) has to be the one it starts. The launcher always starts the installed client otherwise.
+        client = self._client
+        with mock.patch.object(launch, "client_directory", lambda: client) if client is not None else nullcontext():
+            self._desktop = start_desktop(
+                Path(self.backend_cfg.app_client_root) / "main.cjs",
+                environment={"SIM_VIEWER_ATTACH_URL": self._host.url, "SIM_VIEWER_ATTACH_TOKEN": self._host.token},
+            )
         self._resources.callback(self._desktop.close)
 
     def _move_camera(self, view: ImageView, local: np.ndarray) -> None:
