@@ -158,6 +158,7 @@ class IsaacSimVisualizer(BaseVisualizer):
             up,
             UsdGeom.GetStageMetersPerUnit(sim.stage),
             scene.clone_copies,
+            renderer,
         )
         client_roots = client_roots_for_backend("web")
         if self.backend_cfg.app_client_root is not None:
@@ -237,7 +238,12 @@ class IsaacSimVisualizer(BaseVisualizer):
             return
         self._next_render = now + 1.0 / self.cfg.window.fps
         time_ns = int(self._sim_time * 1e9)
-        if self._opener.drain(time_ns):
+        changed = self._opener.drain(time_ns)
+        if self._opener.redraw:
+            # A pick or a new selection outline needs a render even when the scene is unchanged.
+            self._opener.redraw = False
+            changed = True
+        if changed:
             for view in self._viewports.values():
                 view.invalidate()
         if self.cfg.enable_markers and self._marker_revision != self._sim.vis_marker_registry.revision:

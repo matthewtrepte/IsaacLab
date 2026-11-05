@@ -28,10 +28,12 @@ import math
 import os
 import sys
 import tempfile
+import threading
 import weakref
 from builtins import ExceptionGroup
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from concurrent.futures import Future
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
@@ -59,6 +61,7 @@ from ovrtx import (
     Renderer,
     RendererConfig,
     RenderProductSetOutputs,
+    SelectionGroupStyle,
     Semantic,
     TextureStreamingMode,
 )
@@ -320,6 +323,13 @@ class OVRTXRenderer(BaseRenderer):
         self.markers: dict[Any, OVRTXMarkers] = {}
         self.marker_groups: Iterable = ()
         self.geometry_callbacks: dict[Any, Callable[[OVRTXRenderer], None]] = {}
+        self._selection_lock = threading.Lock()
+        self._picks: dict[str, tuple[tuple[float, float, float, float], Future]] = {}
+        """Pick rectangles per render product, answered by the product's next synchronous render."""
+        self._selection: list[str] | None = None
+        """Selection outline to apply before the next render, or ``None`` if unchanged."""
+        self._outlined: list[str] = []
+        self._selection_styled = False
         self.geometry_resources = contextlib.ExitStack()
         self._sdp = self._sim.get_scene_data_provider()
         self._transforms_timestamp = -1
@@ -939,6 +949,89 @@ class OVRTXRenderer(BaseRenderer):
                     data.warp_buffers[str(RenderBufferKind.RGBA)],
                 )
 
+    def request_pick(self, camera_path: str, rect: tuple[float, float, float, float]) -> Future:
+        """Ask which prims a camera's next render shows in a rectangle of its image; thread-safe.
+
+        Args:
+            camera_path: Prim path of a camera this renderer renders.
+            rect: ``(left, top, right, bottom)`` in ``[0, 1]`` with a top-left origin.
+
+        Returns:
+            A future of the hit prim paths in hit order, without repeats. A newer request for the same camera
+            cancels it. Synchronous renders answer picks; asynchronous rendering leaves them pending.
+
+        Raises:
+            KeyError: This renderer renders no camera at ``camera_path``.
+        """
+        product = next(
+            (data.render_product_path for data in self._camera_render_data if camera_path in data.camera_paths), None
+        )
+        if product is None:
+            raise KeyError(f"No OVRTX camera at {camera_path!r}")
+        future: Future = Future()
+        with self._selection_lock:
+            previous = self._picks.get(product)
+            self._picks[product] = (rect, future)
+        if previous is not None:
+            previous[1].cancel()
+        return future
+
+    @property
+    def has_pending_picks(self) -> bool:
+        """Whether a pick waits for a render."""
+        with self._selection_lock:
+            return bool(self._picks)
+
+    def set_selection_outline(self, paths: Sequence[str]) -> None:
+        """Outline ``paths`` in every product from the next render on; an empty selection clears it. Thread-safe."""
+        with self._selection_lock:
+            self._selection = list(paths)
+
+    def _prepare_selection(self, products: set[str]) -> dict[str, tuple[tuple[float, float, float, float], Future]]:
+        """Apply a changed selection outline and enqueue the picks the next render answers."""
+        with self._selection_lock:
+            selection, self._selection = self._selection, None
+            picks = {product: self._picks.pop(product) for product in list(self._picks) if product in products}
+        renderer = self.backend.renderer
+        if selection is not None:
+            if not self._selection_styled:
+                # Kit's selection colour: an orange outline and no fill.
+                style = SelectionGroupStyle(outline_color=(1.0, 0.6, 0.0, 1.0), fill_color=(0.0, 0.0, 0.0, 0.0))
+                renderer.set_selection_group_styles({1: style})
+                self._selection_styled = True
+            if self._outlined:
+                renderer.set_selection_outline_group_strings(self._outlined, 0)
+            if selection:
+                renderer.set_selection_outline_group_strings(selection, 1)
+            self._outlined = selection
+        for product, (rect, _) in picks.items():
+            renderer.enqueue_pick_query(product, *rect)
+        return picks
+
+    def _answer_picks(self, picks: dict[str, tuple[Any, Future]], products: RenderProductSetOutputs) -> None:
+        """Resolve picks from their products' pick-hit output."""
+        for product, (_, future) in picks.items():
+            if future.done():
+                continue
+            try:
+                paths: list[str] = []
+                frames = products[product].frames if product in products.keys() else ()
+                render_vars = frames[0].render_vars if frames else {}
+                hits = next((var for name, var in render_vars.items() if "pick_hit" in name), None)
+                if hits is not None:
+                    mapping = hits.map(device=Device.CPU)
+                    try:
+                        ids = np.from_dlpack(mapping["primPath"]).reshape(-1).tolist()
+                    finally:
+                        mapping.unmap()
+                    for path_id in ids:
+                        path = self.backend.renderer.resolve_prim_path_id(path_id) if path_id else None
+                        if path and path not in paths:
+                            paths.append(path)
+                future.set_result(paths)
+            except Exception as error:  # noqa: BLE001 - a failed pick goes to its caller, not to rendering
+                future.set_exception(error)
+
     def update_transforms(self) -> None:
         """Write changed SDP transforms to OVRTX."""
         binding = self._object_xform_binding
@@ -1110,6 +1203,7 @@ class OVRTXRenderer(BaseRenderer):
         if self.backend.renderer is None or not self._camera_render_data:
             return
         products = self.backend.render_products.copy()
+        picks = self._prepare_selection(products) if not self.cfg.async_rendering or self._use_ovstage else {}
         material_writer = self._visual_material_writer_ref() if self._visual_material_writer_ref is not None else None
         try:
             if material_writer is not None:
@@ -1134,6 +1228,7 @@ class OVRTXRenderer(BaseRenderer):
                     previous.wait().fetch()
             else:
                 result = self.backend.renderer.step(render_products=products, delta_time=_RENDER_DELTA_TIME)
+                self._answer_picks(picks, result)
                 self._process_render_products(render_data, result)
         finally:
             if material_writer is not None:
@@ -1153,6 +1248,7 @@ class OVRTXRenderer(BaseRenderer):
             result = self.backend.renderer.step(
                 render_products=products, delta_time=_RENDER_DELTA_TIME, ordinal=ordinal
             )
+            self._answer_picks(picks, result)
             self._process_render_products(render_data, result)
 
     def cleanup(self, render_data: OVRTXCameraRenderData | None) -> None:

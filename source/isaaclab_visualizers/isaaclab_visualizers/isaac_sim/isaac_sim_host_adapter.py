@@ -259,12 +259,14 @@ def live_inspection_type() -> type:
 class ViewportPicker:
     """Answers the host's viewport picks with Isaac Lab's OVRTX renderer.
 
-    The host's own picker sends requests through Isaac Sim's scheduled renderer; here the next render Isaac Lab starts
-    answers them.
+    The host's own picker sends requests through Isaac Sim's scheduled renderer; here the viewport's camera answers
+    them with its next render.
 
     Args:
-        renderer: Isaac Lab's viewer renderer (``ViewerRenderer``).
+        renderer: Isaac Lab's OVRTX renderer of the viewer cameras (``isaaclab_ov.renderers.OVRTXRenderer``).
+        cameras: Camera prim path of each viewport's render product.
         data: The world's data handle, for the answering simulation time.
+        on_request: Called after a pick is queued, so the caller renders soon even if nothing else changed.
     """
 
     capabilities = {
@@ -275,11 +277,13 @@ class ViewportPicker:
         "native_events": False,
     }
 
-    def __init__(self, renderer: Any, data: HostData):
+    def __init__(self, renderer: Any, cameras: dict[str, str], data: HostData, on_request: Any = None):
         import itertools
 
         self._renderer = renderer
+        self._cameras = cameras
         self._data = data
+        self._on_request = on_request
         self._ids = itertools.count(1)
 
     def pick(self, host: Any, product: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -293,7 +297,10 @@ class ViewportPicker:
         rect = picking.normalized_rect(body)
         maximum = maximum_hits(body)
         request_id = next(self._ids)
-        paths = self._renderer.request_pick(product, rect).result(timeout=5.0)
+        future = self._renderer.request_pick(self._cameras[product], rect)
+        if self._on_request is not None:
+            self._on_request()
+        paths = future.result(timeout=5.0)
         return picking.pick_payload(request_id, paths, maximum_hits=maximum, sim_time_ns=self._data.time_ns)
 
 
@@ -301,16 +308,20 @@ class SelectionOutline:
     """Outlines the host's selection in Isaac Lab's OVRTX renderer.
 
     Args:
-        renderer: Isaac Lab's viewer renderer (``ViewerRenderer``).
+        renderer: Isaac Lab's OVRTX renderer of the viewer cameras (``isaaclab_ov.renderers.OVRTXRenderer``).
+        on_change: Called after the selection changes, so the caller renders the outline soon.
     """
 
     supports_selection_outline = True
 
-    def __init__(self, renderer: Any):
+    def __init__(self, renderer: Any, on_change: Any = None):
         self._renderer = renderer
+        self._on_change = on_change
 
     def set_selection_outline(self, paths: list[str]) -> None:
         self._renderer.set_selection_outline(paths)
+        if self._on_change is not None:
+            self._on_change()
 
 
 class BorrowedContext:

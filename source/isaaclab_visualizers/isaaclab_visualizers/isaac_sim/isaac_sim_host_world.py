@@ -26,7 +26,9 @@ from .isaac_sim_host_adapter import (
     CloneAuthoring,
     HostClock,
     HostData,
+    SelectionOutline,
     StageView,
+    ViewportPicker,
     live_inspection_type,
 )
 from .isaac_sim_host_stage import FrameStore, SceneWriter
@@ -81,6 +83,7 @@ class HostWorldOpener:
         up: Stage up axis as a vector.
         meters_per_unit: Stage units [m].
         copies: Isaac Lab's environment clones as ``(source, targets)``, so the property pane describes clones.
+        renderer: Isaac Lab's OVRTX renderer of the viewer cameras, which answers picks and outlines the selection.
     """
 
     def __init__(
@@ -94,6 +97,7 @@ class HostWorldOpener:
         up: tuple[float, float, float],
         meters_per_unit: float,
         copies: Sequence[tuple[str, Sequence[str]]],
+        renderer: Any,
     ):
         from isaacsim.viewports.authoring import AuthoringSession
 
@@ -106,6 +110,9 @@ class HostWorldOpener:
         self._up = up
         self._meters_per_unit = meters_per_unit
         self._copies = copies
+        self._renderer = renderer
+        self.redraw = False
+        """Set when a pick or a selection change needs a new frame although the scene did not change."""
         self._lock = threading.Lock()
         self._world: World | None = None
         self._data: HostData | None = None
@@ -173,6 +180,9 @@ class HostWorldOpener:
         )
         world.on_simulation_step = self._grant_step
         world.renderer_name = "ovrtx"
+        cameras = {spec.product: spec.camera for spec in self._specs}
+        world.picker = ViewportPicker(self._renderer, cameras, data, on_request=self._request_redraw)
+        world.renderer_selection = SelectionOutline(self._renderer, on_change=self._request_redraw)
         world.authoring = CloneAuthoring(self.authoring, self._copies)
         world.authoring_revision = self.authoring.revision
         world.authoring_sync = AuthoringSync(self.authoring.stage)
@@ -212,6 +222,9 @@ class HostWorldOpener:
         world.create_viewport = create_viewport
         world.remove_viewport = lambda spec: set_enabled(spec.product, False)
         world.set_render_product_enabled = set_enabled
+
+    def _request_redraw(self) -> None:
+        self.redraw = True
 
     def _grant_step(self) -> None:
         with self._lock:
