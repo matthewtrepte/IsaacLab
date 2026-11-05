@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
+
+from isaaclab_ov.renderers import OVRTXRendererCfg
 
 from isaaclab.utils import configclass
 from isaaclab.visualizers.visualizer_cfg import VisualizerBackendCfg
@@ -20,9 +22,10 @@ if TYPE_CHECKING:
 class IsaacSimBackendCfg(VisualizerBackendCfg):
     """Configuration for the Isaac Sim 7 viewer attached to an Isaac Lab simulation.
 
-    Isaac Lab keeps its own physics. One OVStage, created by the viewer host's stage context and borrowed by Isaac Lab,
-    is the data layer for both: Isaac Lab owns its ordinals, writes poses, markers and the host's edits, seals, and
-    renders the viewer's products with OVRTX at most ``window.fps`` times a second. The shared
+    Isaac Lab keeps its own physics and loop. The viewer shows Isaac Lab's own OVRTX scene: launch preparation declares
+    the viewer's perspective cameras as ordinary scene cameras on :attr:`renderer_cfg`, whose scene stage the Isaac Sim
+    7 host creates (:func:`~.isaac_sim_host_stage.host_stage`) so its stage tree and property panes read it. Isaac Lab
+    populates that stage and owns its ordinals; the host runs no scheduler. The shared
     :class:`~isaaclab.visualizers.visualizer_cfg.VisualizerCfg` supplies the viewport size (``window.size``), the frame
     rate (``window.fps``) and ``headless``, which serves the viewer without a client.
     """
@@ -33,8 +36,19 @@ class IsaacSimBackendCfg(VisualizerBackendCfg):
     visualizer_type: str = "isaac_sim"
     """Type identifier for the Isaac Sim 7 viewer."""
 
-    cloning_contexts: ClassVar[tuple[type | str, ...]] = ("isaaclab.cloner:UsdReplicateContext",)
-    """The shared stage is populated from the authored USD stage, so every environment is authored there."""
+    launcher_type: ClassVar[str] = "isaaclab_ov.app:OvrtxLauncher"
+    """Registers the OVRTX runtime before the stage is created."""
+
+    renderer_cfg: OVRTXRendererCfg = OVRTXRendererCfg(
+        stage_provider="isaaclab_visualizers.isaac_sim.isaac_sim_host_stage:host_stage"
+    )
+    """Renderer of the viewer's cameras. Its stage provider lets the host's panes read Isaac Lab's scene stage.
+
+    Scene cameras with the same configuration share the instance and its stage.
+    """
+
+    render_settings: dict[str, Any] = dict()
+    """RTX attributes to author on the viewer cameras' render products, as ``{name: (usd_type_name, value)}``."""
 
     camera_controls: Literal["newton", "isaac_sim"] = "newton"
     """Viewport camera bindings.

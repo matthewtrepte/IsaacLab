@@ -189,7 +189,8 @@ class OvrtxReplicateContext(cloner.ReplicateContext):
             if value not in {"0", "1"}:
                 raise ValueError(f"Invalid ISAAC_LAB_OVRTX_USE_OVSTAGE: {value!r}. Expected 0 or 1.")
             share_ovstage = os.environ.get("ISAAC_LAB_SHARE_OVSTAGE") == "1"
-            use_ovstage = share_ovstage or value == "1"
+            provided = any(renderer.cfg.stage_provider is not None for renderer in renderers)
+            use_ovstage = share_ovstage or value == "1" or provided
             if share_ovstage and not with_ovphysx:
                 raise ValueError("Shared OVStage cloning requires OVPhysX.")
         if share_ovstage and sim.backend_manager.backend is not None and sim.backend_manager.backend.owns_scene:
@@ -225,7 +226,11 @@ class OvrtxReplicateContext(cloner.ReplicateContext):
             if use_ovstage:
                 domains = ovstage.PopulationDomain.ALL if share_ovstage else ovstage.PopulationDomain.RENDERING
                 scene = sim.get_or_create_backend(
-                    OvstageBackendCfg(scene_key=None if share_ovstage else backend_cfg, population_domains=domains)
+                    OvstageBackendCfg(
+                        scene_key=None if share_ovstage else backend_cfg,
+                        population_domains=domains,
+                        stage_provider=renderer.cfg.stage_provider,
+                    )
                 )
             renderer.backend = sim.get_or_create_backend(backend_cfg)
             renderer.scene = scene if use_ovstage else renderer.backend

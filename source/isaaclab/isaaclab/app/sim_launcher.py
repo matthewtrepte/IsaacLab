@@ -315,7 +315,7 @@ def validate_launch(  # noqa: C901
     # Declare RTX perspective cameras before scene construction; runtime viewers only borrow their output.
     scene_cfg = next((node for node in configs if isinstance(node, InteractiveSceneCfg)), None)
     for viewer_index, visualizer in enumerate(viewers):
-        if not isinstance(visualizer.backend, NewtonRTXBackendCfg) or scene_cfg is None:
+        if not isinstance(visualizer.backend, (NewtonRTXBackendCfg, IsaacSimBackendCfg)) or scene_cfg is None:
             continue
         sources = (
             [visualizer.view.source] if visualizer.view is not None else list(visualizer.cameras or [
