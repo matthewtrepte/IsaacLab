@@ -256,6 +256,63 @@ def live_inspection_type() -> type:
     return LiveInspection
 
 
+class ViewportPicker:
+    """Answers the host's viewport picks with Isaac Lab's OVRTX renderer.
+
+    The host's own picker sends requests through Isaac Sim's scheduled renderer; here the next render Isaac Lab starts
+    answers them.
+
+    Args:
+        renderer: Isaac Lab's viewer renderer (``ViewerRenderer``).
+        data: The world's data handle, for the answering simulation time.
+    """
+
+    capabilities = {
+        "point": True,
+        "region": True,
+        "multiple_hits": True,
+        "exact_capture": False,
+        "native_events": False,
+    }
+
+    def __init__(self, renderer: Any, data: HostData):
+        import itertools
+
+        self._renderer = renderer
+        self._data = data
+        self._ids = itertools.count(1)
+
+    def pick(self, host: Any, product: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Return the prims under a normalized rectangle of ``product``'s next frame."""
+        from isaacsim.application.host.impl import picking
+        from isaacsim.application.host.impl.renderer_picking import maximum_hits, validate_generation
+
+        if body.get("capture") is not None:
+            raise NotImplementedError("Picks answer the next frame; earlier frames are not retained")
+        validate_generation(host, body)
+        rect = picking.normalized_rect(body)
+        maximum = maximum_hits(body)
+        request_id = next(self._ids)
+        paths = self._renderer.request_pick(product, rect).result(timeout=5.0)
+        return picking.pick_payload(request_id, paths, maximum_hits=maximum, sim_time_ns=self._data.time_ns)
+
+
+class SelectionOutline:
+    """Outlines the host's selection in Isaac Lab's OVRTX renderer.
+
+    Args:
+        renderer: Isaac Lab's viewer renderer (``ViewerRenderer``).
+    """
+
+    supports_selection_outline = True
+
+    def __init__(self, renderer: Any):
+        self._renderer = renderer
+
+    def set_selection_outline(self, paths: list[str]) -> None:
+        self._renderer.set_selection_outline(paths)
+
+
 class BorrowedContext:
     """Stage context whose stage outlives the host's world: ``close()`` leaves it open.
 

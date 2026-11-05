@@ -18,6 +18,7 @@ import itertools
 import threading
 import time
 from collections.abc import Sequence
+from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, NamedTuple
@@ -37,6 +38,9 @@ class Replication(NamedTuple):
     positions: np.ndarray | None
     """Environment origins [m] with shape ``[len(env_paths), 3]``, or ``None`` to keep authored placement."""
 
+
+_PICK_HIT = "pick_hit"
+"""Substring of OVRTX's pick-hit render variable name (``ovrtx_pick_hit``)."""
 
 _MATRIX_ATTRIBUTES = frozenset({"omni:xform", "omni:fabric:worldMatrix", "omni:fabric:localMatrix", "worldMatrix"})
 
@@ -218,6 +222,12 @@ class ViewerRenderer:
         self._lock = threading.Lock()
         self._products: dict[str, bool] = {}
         self._pending: tuple | None = None
+        self._picks: dict[str, tuple[tuple[float, float, float, float], Future]] = {}
+        """Pick rectangles requested by the host, answered by the next render of their product."""
+        self._selection: list[str] | None = None
+        """Selection outline to apply before the next render, or ``None`` if unchanged."""
+        self._outlined: list[str] = []
+        self._styled = False
         self.timings = {"step": 0.0, "readback": 0.0, "renders": 0}
         """Accumulated wall time [s] of OVRTX submission and pixel readback on Isaac Lab's thread, for benchmarking."""
 
@@ -233,6 +243,46 @@ class ViewerRenderer:
         with self._lock:
             if product in self._products:
                 self._products[product] = enabled
+
+    def request_pick(self, product: str, rect: tuple[float, float, float, float]) -> Future:
+        """Ask the next render of ``product`` which prims cover a rectangle; thread-safe.
+
+        Args:
+            product: Render product the rectangle is in.
+            rect: ``(left, top, right, bottom)`` in ``[0, 1]`` with a top-left origin.
+
+        Returns:
+            A future of the hit prim paths, nearest first. A newer request for the product supersedes it.
+        """
+        future: Future = Future()
+        with self._lock:
+            previous = self._picks.get(product)
+            self._picks[product] = (rect, future)
+        if previous is not None:
+            previous[1].cancel()
+        return future
+
+    def set_selection_outline(self, paths: Sequence[str]) -> None:
+        """Outline ``paths`` from the next render on; an empty selection clears the outline. Thread-safe."""
+        with self._lock:
+            self._selection = list(paths)
+
+    def _apply_selection(self) -> None:
+        with self._lock:
+            selection, self._selection = self._selection, None
+        if selection is None:
+            return
+        renderer = self._renderer
+        if not self._styled:
+            # Kit's selection colour: an orange outline and no fill.
+            style = self._ovrtx.SelectionGroupStyle(outline_color=(1.0, 0.6, 0.0, 1.0), fill_color=(0.0, 0.0, 0.0, 0.0))
+            renderer.set_selection_group_styles({1: style})
+            self._styled = True
+        if self._outlined:
+            renderer.set_selection_outline_group_strings(self._outlined, 0)
+        if selection:
+            renderer.set_selection_outline_group_strings(selection, 1)
+        self._outlined = selection
 
     def poll(self, frames: FrameStore) -> tuple[int, bool]:
         """Publish the in-flight render if it finished, without waiting.
@@ -252,10 +302,14 @@ class ViewerRenderer:
             raise RuntimeError("a render is already in flight")
         with self._lock:
             products = {product for product, enabled in self._products.items() if enabled}
+            picks = {product: self._picks.pop(product) for product in list(self._picks) if product in products}
         if products:
             start = time.perf_counter()
+            self._apply_selection()
+            for product, (rect, _) in picks.items():
+                self._renderer.enqueue_pick_query(product, *rect)
             operation = self._renderer.step_async(render_products=products, delta_time=1.0 / 60.0, ordinal=ordinal)
-            self._pending = (operation, products, time_ns, ordinal)
+            self._pending = (operation, products, time_ns, ordinal, picks)
             self.timings["step"] += time.perf_counter() - start
 
     def _collect(self, frames: FrameStore, *, block: bool) -> int:
@@ -264,7 +318,7 @@ class ViewerRenderer:
 
         if self._pending is None:
             return 0
-        operation, products, time_ns, ordinal = self._pending
+        operation, products, time_ns, ordinal, picks = self._pending
         pending = operation.wait(timeout_ns=None if block else 0)
         if pending is None:
             return 0
@@ -276,7 +330,10 @@ class ViewerRenderer:
             output = result[product]
             if not output.frames:
                 continue
-            var = next(iter(output.frames[0].render_vars.values()))
+            render_vars = output.frames[0].render_vars
+            if product in picks:
+                self._answer_pick(render_vars, picks[product][1])
+            var = next(value for name, value in render_vars.items() if _PICK_HIT not in name)
             mapping = var.map(device=self._ovrtx.Device.CUDA, sync_stream=0)
             try:
                 mapping.wait()
@@ -288,6 +345,28 @@ class ViewerRenderer:
         self.timings["readback"] += time.perf_counter() - start
         self.timings["renders"] += 1
         return published
+
+    def _answer_pick(self, render_vars: Any, future: Future) -> None:
+        """Resolve a pick from the render's pick-hit output: prim paths, nearest first, without repeats."""
+        if future.done():
+            return
+        try:
+            hits = next((value for name, value in render_vars.items() if _PICK_HIT in name), None)
+            paths: list[str] = []
+            if hits is not None:
+                mapping = hits.map(device=self._ovrtx.Device.CPU)
+                try:
+                    ids = np.from_dlpack(mapping["primPath"]).reshape(-1).tolist()
+                finally:
+                    mapping.unmap()
+                for path_id in ids:
+                    if path_id:
+                        path = self._renderer.resolve_prim_path_id(path_id)
+                        if path not in paths:
+                            paths.append(path)
+            future.set_result(paths)
+        except Exception as error:  # noqa: BLE001 - a failed pick is reported to its caller, not to rendering
+            future.set_exception(error)
 
     def close(self) -> None:
         """Finish the in-flight render, then detach from the stage."""

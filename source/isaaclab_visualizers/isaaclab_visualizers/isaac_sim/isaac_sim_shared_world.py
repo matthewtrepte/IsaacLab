@@ -29,7 +29,9 @@ from .isaac_sim_host_adapter import (
     CloneAuthoring,
     HostClock,
     HostData,
+    SelectionOutline,
     StageView,
+    ViewportPicker,
     live_inspection_type,
 )
 from .isaac_sim_shared_stage import FrameStore, Replication, SharedStage, ViewerRenderer
@@ -193,6 +195,8 @@ class SharedWorldOpener:
         )
         world.on_simulation_step = self._grant_step
         world.renderer_name = "ovrtx"
+        world.picker = ViewportPicker(self.renderer, data)
+        world.renderer_selection = SelectionOutline(self.renderer)
         world.authoring = CloneAuthoring(self.authoring, self._copies)
         world.authoring_revision = self.authoring.revision
         world.authoring_sync = AuthoringSync(self.authoring.stage)
