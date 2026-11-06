@@ -31,7 +31,7 @@ from .isaac_sim_host_adapter import (
     ViewportPicker,
     live_inspection_type,
 )
-from .isaac_sim_host_stage import FrameStore, SceneWriter
+from .isaac_sim_host_stage import FrameStore, GizmoSelections, SceneWriter
 
 if TYPE_CHECKING:
     from isaacsim.application.host import ViewportSpec, World
@@ -117,6 +117,8 @@ class HostWorldOpener:
         self._renderer = renderer
         self._manipulation = manipulation
         self._owners = owners
+        self.gizmo = GizmoSelections()
+        """Each client's selection, for the gizmo calibration Isaac Lab attaches to its frames."""
         self.redraw = False
         """Set when a pick or a selection change needs a new frame although the scene did not change."""
         self._lock = threading.Lock()
@@ -189,6 +191,7 @@ class HostWorldOpener:
         cameras = {spec.product: spec.camera for spec in self._specs}
         world.picker = ViewportPicker(self._renderer, cameras, data, on_request=self._request_redraw)
         world.renderer_selection = SelectionOutline(self._renderer, on_change=self._request_redraw)
+        world.gizmo_capture = self.gizmo
         world.authoring = CloneAuthoring(self.authoring, self._copies, self._owners)
         world.authoring_revision = self.authoring.revision
         world.authoring_sync = AuthoringSync(self.authoring.stage)

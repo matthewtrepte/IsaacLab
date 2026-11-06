@@ -22,7 +22,7 @@ import torch
 from pxr import UsdGeom
 
 from isaaclab.sim import SimulationContext
-from isaaclab.utils.math import quat_from_matrix
+from isaaclab.utils.math import matrix_from_quat, quat_from_matrix
 from isaaclab.visualizers.base_visualizer import BaseVisualizer
 from isaaclab.visualizers.visualizer_cfg import PerspectiveCameraCfg, VisualizerCfg
 
@@ -285,13 +285,68 @@ class IsaacSimVisualizer(BaseVisualizer):
             if image is None or not fresh:
                 continue
             self._shown.add(product)
-            self._opener.frames.publish(product, np.ascontiguousarray(image.numpy()), time_ns)
+            camera, transforms = self._calibration(view)
+            self._opener.frames.publish(
+                product,
+                np.ascontiguousarray(image.numpy()),
+                time_ns,
+                generation=self._host.simulation.progress.generation,
+                camera=camera,
+                transforms=transforms,
+            )
             published = True
         # A render seals the commands' writes; without one they stay at the open ordinal until the next.
         if published:
             self.renders += 1
             self._opener.published()
             self._host.simulation.request_redraw()
+
+    def _calibration(self, view: ImageView) -> tuple:
+        """Describe a just-rendered viewport image for the client's transform gizmo.
+
+        The client draws the gizmo only over an image whose camera and selected transforms it knows. Isaac Lab renders
+        the image synchronously from the stage it just sealed, so the stage's current matrices match it.
+
+        Returns:
+            The camera calibration (an ``isaacsim.viewports.manager.CameraSnapshot``, or ``None`` if unavailable) and
+            the world matrices of the selected prims and selection pivots, keyed by path or pivot key.
+        """
+        from isaacsim.common.interfaces import Query
+        from isaacsim.viewports.manager import CameraSnapshot
+
+        context, camera = self._opener._context, view.camera
+
+        def world(path: str) -> np.ndarray:
+            return np.asarray(context.read(Query(path), "omni:fabric:worldMatrix"), dtype=float).reshape(4, 4)
+
+        try:
+            height, width = camera.image_shape
+            intrinsics = camera.data.intrinsic_matrices.torch[0].detach().cpu().numpy()
+            near, far = camera.cfg.spawn.clipping_range
+            projection = np.zeros((4, 4))
+            projection[0, 0] = 2.0 * intrinsics[0, 0] / width
+            projection[1, 1] = 2.0 * intrinsics[1, 1] / height
+            projection[2, 2] = -(far + near) / (far - near)
+            projection[2, 3] = -2.0 * far * near / (far - near)
+            projection[3, 2] = -1.0
+            # The sensor's pose is the one the renderer used; the snapshot takes the world-to-camera matrix, with the
+            # camera looking along -Z and Y up (the OpenGL convention).
+            camera_to_world = np.eye(4)
+            camera_to_world[:3, :3] = matrix_from_quat(camera.data.quat_w_opengl.torch[:1]).cpu().numpy()[0]
+            camera_to_world[:3, 3] = camera.data.pos_w.torch[0].detach().cpu().numpy()
+            snapshot = CameraSnapshot(np.linalg.inv(camera_to_world), projection, width, height, 1.0)
+        except Exception:  # noqa: BLE001 - without calibration the image simply shows no gizmo
+            return None, ()
+        transforms = []
+        for paths in self._opener.gizmo.selections():
+            try:
+                matrices = {path: world(path) for path in paths}
+                transforms.extend((path, matrix.reshape(-1)) for path, matrix in matrices.items())
+                frame = self._opener._world.authoring.selection_frame(list(paths), matrices)
+                transforms.append((frame["pivot_key"], np.asarray(frame["matrix"], dtype=float).reshape(-1)))
+            except Exception:  # noqa: BLE001 - a selection that cannot be framed shows no gizmo
+                continue
+        return snapshot, tuple(dict(transforms).items())
 
     def _play(self) -> None:
         """Put the viewer's transport controls in Playing."""

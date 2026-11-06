@@ -141,6 +141,31 @@ class SceneWriter:
             self._scene.stage.delete_attributes(query, [], ordinal=self._scene.ordinal).wait()
 
 
+class GizmoSelections:
+    """Each client's selection, which the host reports for its transform gizmo.
+
+    The host's own gizmo capture also computes the overlay calibration; here Isaac Lab attaches it to each frame it
+    publishes, so this only records the selections.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._selections: dict[str, tuple[str, ...]] = {}
+
+    def select(self, paths: Sequence[str], *, owner: str = "") -> None:
+        """Record a client's selection; an empty or oversized one has no gizmo."""
+        with self._lock:
+            if 0 < len(paths) <= 128:
+                self._selections[owner] = tuple(paths)
+            else:
+                self._selections.pop(owner, None)
+
+    def selections(self) -> tuple[tuple[str, ...], ...]:
+        """Return the distinct selections of all clients."""
+        with self._lock:
+            return tuple(dict.fromkeys(self._selections.values()))
+
+
 class FrameStore:
     """Latest viewer frame per render product, in the shape the host's renderer outputs read."""
 
@@ -149,21 +174,41 @@ class FrameStore:
         self._frames: dict[str, Any] = {}
         self._ids = itertools.count(1)
 
-    def publish(self, product: str, pixels: np.ndarray, time_ns: int) -> None:
-        """Make an RGBA ``[H, W, 4]`` uint8 image the latest frame of ``product``."""
+    def publish(
+        self,
+        product: str,
+        pixels: np.ndarray,
+        time_ns: int,
+        *,
+        generation: int = 0,
+        camera: Any = None,
+        transforms: Sequence[tuple[str, Sequence[float]]] = (),
+    ) -> None:
+        """Make an RGBA ``[H, W, 4]`` uint8 image the latest frame of ``product``.
+
+        Args:
+            product: Render product the image is of.
+            pixels: The image.
+            time_ns: Simulation time [ns] of the image.
+            generation: The host world's generation the image belongs to.
+            camera: The camera's calibration for the image (an ``isaacsim.viewports.manager.CameraSnapshot``), which
+                the client needs to draw its transform gizmo over the image.
+            transforms: World matrices of the selected prims and selection pivots, keyed by path or pivot key.
+        """
+        frame_id = next(self._ids)
         frame = SimpleNamespace(
             pixels=pixels,
             memory="cpu",
-            frame_id=next(self._ids),
+            frame_id=frame_id,
             time_ns=time_ns,
             source="isaaclab-ovrtx",
-            generation=0,
+            generation=generation,
             input_ordinal=0,
             output_ordinal=0,
-            capture_id=None,
+            capture_id=frame_id,
             timeline="participant",
-            transforms=[],
-            camera=None,
+            transforms=tuple((key, tuple(map(float, matrix))) for key, matrix in transforms),
+            camera=camera,
             depth=None,
         )
         with self._lock:
