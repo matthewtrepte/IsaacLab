@@ -84,7 +84,7 @@ class HostWorldOpener:
         meters_per_unit: Stage units [m].
         copies: Isaac Lab's environment clones as ``(source, targets)``, so the property pane describes clones.
         renderer: Isaac Lab's OVRTX renderer of the viewer cameras, which answers picks and outlines the selection.
-        manipulation: Creates the live manipulation of Isaac Lab's assets from the world's authoring session.
+        manipulation: Creates the live manipulation of Isaac Lab's assets for a world and its authoring session.
         owners: Resolves a prim to the Isaac Lab asset instance that owns it, or ``None``.
     """
 
@@ -100,7 +100,7 @@ class HostWorldOpener:
         meters_per_unit: float,
         copies: Sequence[tuple[str, Sequence[str]]],
         renderer: Any,
-        manipulation: Callable[[Any], Any],
+        manipulation: Callable[[Any, Any], Any],
         owners: Callable[[str], Any],
     ):
         from isaacsim.viewports.authoring import AuthoringSession
@@ -196,7 +196,7 @@ class HostWorldOpener:
         world.authoring_revision = self.authoring.revision
         world.authoring_sync = AuthoringSync(self.authoring.stage)
         # The transform gizmo moves Isaac Lab's assets; Isaac Lab drains the gestures with the other commands.
-        world.manipulation = self._manipulation(world.authoring)
+        world.manipulation = self._manipulation(world, world.authoring)
         manipulation = SceneCommands(rate=self._rate, on_submit=wake)
         manipulation.add_reader("holds", world.manipulation.tick)
         world.manipulation_worker = manipulation

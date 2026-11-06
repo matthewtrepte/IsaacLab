@@ -133,7 +133,7 @@ class IsaacSimVisualizer(BaseVisualizer):
 
         from .isaac_sim_host_stage import FrameStore, HostStage, SceneWriter
         from .isaac_sim_host_world import HostWorldOpener
-        from .isaac_sim_manipulation import AssetManipulation, AssetOwners
+        from .isaac_sim_manipulation import AssetOwners, asset_manipulation
 
         scene = renderer.scene
         if not isinstance(getattr(scene, "stage_owner", None), HostStage):
@@ -152,7 +152,8 @@ class IsaacSimVisualizer(BaseVisualizer):
             view.camera.cfg.prim_path: (lambda matrix, view=view: self._move_camera(view, matrix))
             for view in self._viewports.values()
         }
-        owners = AssetOwners(sim.get_scene_data_provider().get_interactive_scene())
+        provider = sim.get_scene_data_provider()
+        owners = AssetOwners(provider.get_interactive_scene())
         self._opener = HostWorldOpener(
             scene_file,
             scene.stage_owner.context,
@@ -164,7 +165,9 @@ class IsaacSimVisualizer(BaseVisualizer):
             UsdGeom.GetStageMetersPerUnit(sim.stage),
             scene.clone_copies,
             renderer,
-            lambda authoring: AssetManipulation(owners, authoring, sim.forward),
+            lambda world, authoring: asset_manipulation(
+                world, authoring, owners, provider.backend.transform_paths, sim.forward
+            ),
             owners,
         )
         client_roots = client_roots_for_backend("web")
