@@ -179,11 +179,13 @@ class CloneAuthoring:
     Args:
         session: The host's ``isaacsim.viewports.authoring.AuthoringSession``.
         copies: Source subtrees and their clone destinations.
+        owners: Resolves a prim to the Isaac Lab asset instance that owns it (with a ``root`` path), or ``None``.
     """
 
-    def __init__(self, session: Any, copies: Sequence[tuple[str, Sequence[str]]]):
+    def __init__(self, session: Any, copies: Sequence[tuple[str, Sequence[str]]], owners: Any = None):
         self._session = session
         self._sources = {target: source for source, targets in copies for target in targets}
+        self._owners = owners
 
     def source_of(self, path: str) -> str | None:
         """Return the authored prim a cloned path was copied from, or ``None`` if it is not a clone."""
@@ -206,6 +208,53 @@ class CloneAuthoring:
         return {
             name: {**row, "writable": False, "write_reason": reason}
             for name, row in self._session.attributes(source).items()
+        }
+
+    def selection_frame(self, paths: list[str], matrices: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Describe a selection's pivot and roots, looking cloned prims up by their source prim.
+
+        Args:
+            paths: Selected prim paths, the active prim last.
+            matrices: Optional live world matrices keyed by selected path; they place a clone's pivot where it is.
+
+        Returns:
+            The authoring session's frame, with paths and roots naming the selected prims.
+        """
+        instances = [self._owners(path) for path in paths] if self._owners is not None else []
+        if instances and all(instance is not None for instance in instances):
+            return self._asset_frame(paths, [instance.root for instance in instances], matrices)
+        sources = [self.source_of(path) or path for path in paths]
+        if len(set(sources)) != len(sources):
+            raise ValueError("Select copies of different prims, not the same prim in several environments")
+        selected = dict(zip(sources, paths))
+        mapped = None if matrices is None else {source: matrices[path] for source, path in selected.items()}
+        frame = dict(self._session.selection_frame(sources, mapped))
+        frame["paths"] = [selected.get(path, path) for path in frame["paths"]]
+        frame["roots"] = [selected.get(path, path) for path in frame["roots"]]
+        return frame
+
+    @staticmethod
+    def _asset_frame(paths: list[str], roots: list[str], matrices: dict[str, Any] | None) -> dict[str, Any]:
+        """Frame a selection of Isaac Lab assets: they move as whole instances, pivoting at the active prim.
+
+        The authored scene cannot describe these selections: an asset's visual meshes are often inside instances, and
+        Isaac Lab poses the asset by its root rather than by the selected prim.
+        """
+        import numpy as np
+
+        roots = list(dict.fromkeys(roots))
+        pivot = np.eye(4)
+        if matrices is not None:
+            active = np.asarray(matrices[paths[-1]], dtype=float).reshape(4, 4)
+            # Keep the rotation and position of the active prim; drop its scale.
+            u, _, vt = np.linalg.svd(active[:3, :3])
+            pivot[:3, :3] = u @ vt
+            pivot[3, :3] = active[3, :3]
+        return {
+            "paths": list(paths),
+            "roots": roots,
+            "pivot_key": "|".join(roots),
+            "matrix": pivot.reshape(-1).tolist(),
         }
 
     def __getattr__(self, name: str) -> Any:

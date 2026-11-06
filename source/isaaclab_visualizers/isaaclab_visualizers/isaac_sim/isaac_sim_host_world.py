@@ -84,6 +84,8 @@ class HostWorldOpener:
         meters_per_unit: Stage units [m].
         copies: Isaac Lab's environment clones as ``(source, targets)``, so the property pane describes clones.
         renderer: Isaac Lab's OVRTX renderer of the viewer cameras, which answers picks and outlines the selection.
+        manipulation: Creates the live manipulation of Isaac Lab's assets from the world's authoring session.
+        owners: Resolves a prim to the Isaac Lab asset instance that owns it, or ``None``.
     """
 
     def __init__(
@@ -98,6 +100,8 @@ class HostWorldOpener:
         meters_per_unit: float,
         copies: Sequence[tuple[str, Sequence[str]]],
         renderer: Any,
+        manipulation: Callable[[Any], Any],
+        owners: Callable[[str], Any],
     ):
         from isaacsim.viewports.authoring import AuthoringSession
 
@@ -111,6 +115,8 @@ class HostWorldOpener:
         self._meters_per_unit = meters_per_unit
         self._copies = copies
         self._renderer = renderer
+        self._manipulation = manipulation
+        self._owners = owners
         self.redraw = False
         """Set when a pick or a selection change needs a new frame although the scene did not change."""
         self._lock = threading.Lock()
@@ -183,9 +189,15 @@ class HostWorldOpener:
         cameras = {spec.product: spec.camera for spec in self._specs}
         world.picker = ViewportPicker(self._renderer, cameras, data, on_request=self._request_redraw)
         world.renderer_selection = SelectionOutline(self._renderer, on_change=self._request_redraw)
-        world.authoring = CloneAuthoring(self.authoring, self._copies)
+        world.authoring = CloneAuthoring(self.authoring, self._copies, self._owners)
         world.authoring_revision = self.authoring.revision
         world.authoring_sync = AuthoringSync(self.authoring.stage)
+        # The transform gizmo moves Isaac Lab's assets; Isaac Lab drains the gestures with the other commands.
+        world.manipulation = self._manipulation(world.authoring)
+        manipulation = SceneCommands(rate=self._rate, on_submit=wake)
+        manipulation.add_reader("holds", world.manipulation.tick)
+        world.manipulation_worker = manipulation
+        world.command_sources.append(manipulation)
         # Property inspection supplies the selected prims' live world poses; Isaac Lab drains it with the commands.
         inspection = SceneCommands(rate=RationalRate(10), on_submit=wake)
         world.inspection = live_inspection_type()(inspection, set(), context)

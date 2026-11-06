@@ -133,6 +133,7 @@ class IsaacSimVisualizer(BaseVisualizer):
 
         from .isaac_sim_host_stage import FrameStore, HostStage, SceneWriter
         from .isaac_sim_host_world import HostWorldOpener
+        from .isaac_sim_manipulation import AssetManipulation, AssetOwners
 
         scene = renderer.scene
         if not isinstance(getattr(scene, "stage_owner", None), HostStage):
@@ -151,6 +152,7 @@ class IsaacSimVisualizer(BaseVisualizer):
             view.camera.cfg.prim_path: (lambda matrix, view=view: self._move_camera(view, matrix))
             for view in self._viewports.values()
         }
+        owners = AssetOwners(sim.get_scene_data_provider().get_interactive_scene())
         self._opener = HostWorldOpener(
             scene_file,
             scene.stage_owner.context,
@@ -162,6 +164,8 @@ class IsaacSimVisualizer(BaseVisualizer):
             UsdGeom.GetStageMetersPerUnit(sim.stage),
             scene.clone_copies,
             renderer,
+            lambda authoring: AssetManipulation(owners, authoring, sim.forward),
+            owners,
         )
         client_roots = client_roots_for_backend("web")
         if self.backend_cfg.app_client_root is not None:
@@ -243,6 +247,12 @@ class IsaacSimVisualizer(BaseVisualizer):
         # USD matrices multiply row vectors, so the rotation's columns are the rows of the upper 3x3 block.
         rotation = torch.as_tensor(local[:3, :3].T, dtype=torch.float32, device=camera.device)
         camera.set_world_poses(position, quat_from_matrix(rotation).unsqueeze(0), convention="opengl")
+        self._redraw(view)
+
+    @staticmethod
+    def _redraw(view: ImageView) -> None:
+        """Make the next read capture a new image, also when no simulation step has outdated the camera (paused)."""
+        view.camera._invalidate_buffers()
         view.invalidate()
 
     def _render_frame(self) -> None:
@@ -259,11 +269,11 @@ class IsaacSimVisualizer(BaseVisualizer):
             changed = True
         if changed:
             for view in self._viewports.values():
-                view.invalidate()
+                self._redraw(view)
         if self.cfg.enable_markers and self._marker_revision != self._sim.vis_marker_registry.revision:
             self._marker_revision = self._sim.vis_marker_registry.revision
             for view in self._viewports.values():
-                view.invalidate()
+                self._redraw(view)
         frame_id = self._sim.get_physics_step_count()
         published = False
         self._shown &= self._opener.enabled
