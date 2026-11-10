@@ -5,10 +5,11 @@
 
 """Isaac Sim 7 viewer visualizer backend (prototype), selected with ``--viz isaac-sim``.
 
-One OVStage is the data layer for Isaac Lab and the Isaac Sim 7 viewer application. Isaac Lab owns its ordinals: it
-writes body poses and visualization markers, applies the application host's commands, seals, and renders the viewer's
-render products with OVRTX. The host supplies its stage tree, property and content panes, transport controls and frame
-streaming; it runs no scheduler, and Isaac Lab drives every update.
+The viewer shows Isaac Lab's own OVRTX scene. Its cameras are scene cameras on a shared OVRTX renderer whose scene stage
+the Isaac Sim 7 application host creates, so the host's stage tree and property panes read the stage Isaac Lab renders.
+Isaac Lab populates that stage, owns its ordinals, and draws body poses and visualization markers through its renderer.
+The host supplies its panes, transport controls and frame streaming; it runs no scheduler, and Isaac Lab drives every
+update.
 
 Prototype requirements, not yet captured by the package dependencies:
 

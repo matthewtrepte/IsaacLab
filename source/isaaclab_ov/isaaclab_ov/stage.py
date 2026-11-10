@@ -159,6 +159,15 @@ class OvstageBackendCfg(BackendCfg):
     """None selects the simulation scene; isolated consumers use their configuration or instance identity."""
     population_domains: ovstage.PopulationDomain = ovstage.PopulationDomain.RENDERING
     """USD domains to populate. Physics consumers require PHYSICS or ALL."""
+    stage_provider: str | None = None
+    """``module:callable`` that creates the stage instead of :func:`create_ovstage`, or ``None``.
+
+    The callable takes the stage name and returns a context manager whose value has a ``stage`` attribute: the
+    :class:`ovstage.Stage` to populate. The value stays available as :attr:`OvstageBackend.stage_owner` until the
+    backend closes, so an application that created the stage (for example a viewer that registers it with its own
+    stage context) can find it. The stage may already hold sealed ordinals; population starts after them. If the value
+    has a ``prepare_population(usda) -> usda`` method, population uses the USD it returns.
+    """
 
 
 class OvstageBackend:
@@ -177,13 +186,16 @@ class OvstageBackend:
         self.clone_positions: np.ndarray | None = None
         self.resources = contextlib.ExitStack()
         """Release borrowers before paths and stage, in reverse registration order."""
+        self.stage_owner = None
+        """The value the configured :attr:`OvstageBackendCfg.stage_provider` created, or ``None``."""
         self.reset()
 
     def populate(self, usda: str) -> None:
         """Import the exported prototypes and apply the clone context's prepared operations.
 
-        Population commits ordinal 1. Consumers may then author render products and poses
-        starting at ordinal 2, after every cloned camera path exists.
+        Population commits the first ordinal after those the stage was created with (ordinal 1 for a stage from
+        :func:`create_ovstage`). Consumers then author render products and poses at later ordinals, after every
+        cloned camera path exists.
 
         Args:
             usda: USD scene containing the routed prototypes and their materials.
@@ -191,12 +203,16 @@ class OvstageBackend:
         if self.ordinal:
             return
 
-        # Ordinal 0 is the empty state; population and cloning form the first committed write.
-        ovstage.population.open_usd_from_string(self.stage, usda, ordinal=1, domains=self.cfg.population_domains)
+        prepare = getattr(self.stage_owner, "prepare_population", None)
+        if prepare is not None:
+            usda = prepare(usda)
+        # Population and cloning form the first committed write after the stage's initial state.
+        ordinal = self._initial_floor + 1
+        ovstage.population.open_usd_from_string(self.stage, usda, ordinal=ordinal, domains=self.cfg.population_domains)
         ovstage_replicate(
-            self.stage, self.paths, self.clone_copies, self.clone_env_paths, self.clone_positions, ordinal=1
+            self.stage, self.paths, self.clone_copies, self.clone_env_paths, self.clone_positions, ordinal=ordinal
         )
-        self.ordinal = 1
+        self.ordinal = ordinal
         self.commit()
 
     @contextlib.contextmanager
@@ -226,14 +242,25 @@ class OvstageBackend:
     def close(self) -> None:
         """Release borrowers, then the path dictionary and stage."""
         self.resources.close()
-        self.stage = self.paths = None
+        self.stage = self.paths = self.stage_owner = None
 
     def reset(self) -> None:
         """Recreate the native stage after all consumers detach, retaining the prepared clone operations."""
         self.close()
         self.ordinal = self.next_camera_id = 0
         with contextlib.ExitStack() as resources:
-            self.stage = resources.enter_context(create_ovstage("isaaclab.scene"))
+            # A stage Isaac Lab creates starts empty; a provided one may already hold sealed ordinals.
+            self._initial_floor = 0
+            if self.cfg.stage_provider is None:
+                self.stage = resources.enter_context(create_ovstage("isaaclab.scene"))
+            else:
+                from isaaclab.utils.string import string_to_callable
+
+                self.stage_owner = resources.enter_context(
+                    string_to_callable(self.cfg.stage_provider)("isaaclab.scene")
+                )
+                self.stage = self.stage_owner.stage
+                self._initial_floor = self.stage.fetch_ordinal(self.stage.get_attribute_write_floor())
             self.paths = resources.enter_context(ovstage.PathDictionary(self.stage))
             self.resources = resources.pop_all()
 

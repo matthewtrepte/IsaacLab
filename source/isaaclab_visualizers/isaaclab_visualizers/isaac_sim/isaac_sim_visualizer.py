@@ -12,40 +12,40 @@ import logging
 import os
 import tempfile
 import time
+from contextlib import nullcontext
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import numpy as np
-import warp as wp
+import torch
 
-from pxr import Sdf, Usd
+from pxr import UsdGeom
 
-from isaaclab.scene_data import SceneDataFormat
 from isaaclab.sim import SimulationContext
+from isaaclab.utils.math import matrix_from_quat, quat_from_matrix
 from isaaclab.visualizers.base_visualizer import BaseVisualizer
 from isaaclab.visualizers.visualizer_cfg import PerspectiveCameraCfg, VisualizerCfg
 
-from .isaac_sim_shared_stage import Replication
-from .isaac_sim_stage import authored_scales
 from .isaac_sim_visualizer_cfg import IsaacSimBackendCfg
 
 if TYPE_CHECKING:
     from isaaclab.sensors.camera import Camera
+    from isaaclab.visualizers.image_view import ImageView
 
 logger = logging.getLogger(__name__)
 
-_ENVS_ROOT = "/World/envs"
-"""Parent of Isaac Lab's cloned environments."""
+_VIEWER_CAMERA_PREFIX = "/World/viewer_camera_"
+"""Prim path prefix of the perspective cameras launch preparation declares for viewers."""
 
 
 class IsaacSimVisualizer(BaseVisualizer):
-    """Isaac Sim 7 viewer application on an OVStage shared with Isaac Lab.
+    """Isaac Sim 7 viewer application on Isaac Lab's own OVRTX scene.
 
-    The host's stage context creates and registers one OVStage; Isaac Lab borrows it and owns its ordinals. Each
-    rendered frame, Isaac Lab writes body poses and visualization markers, applies the host's commands, seals the
-    ordinal and renders the viewer's products with OVRTX. The host reads the same stage for its stage tree and property
-    panes and streams the frames to its client. Isaac Lab keeps its own loop and physics.
+    Launch preparation declares the viewer's perspective cameras as ordinary scene cameras on
+    :attr:`IsaacSimBackendCfg.renderer_cfg`. That renderer's scene stage is created by the host's stage context, so the
+    host's stage tree and property panes read the stage Isaac Lab renders. Each frame, Isaac Lab applies the host's
+    queued commands at its open ordinal, renders the viewer cameras, and hands their images to the host, which streams
+    them to its client. Isaac Lab keeps its own loop and physics; the host runs no scheduler.
     """
 
     def __init__(self, cfg: VisualizerCfg):
@@ -61,15 +61,17 @@ class IsaacSimVisualizer(BaseVisualizer):
         self._resources = contextlib.ExitStack()
         self._host = None
         self._desktop = None
-        self._provider = None
-        self._shared = None
-        self._markers = None
-        self._paths: list[str] = []
-        self._scales = None
-        self._pose_output = SceneDataFormat.TransposedMatrix44d()
-        self._armed = False
+        self._opener = None
+        self._client: Path | None = None
+        """Patched copy of the Isaac Sim client the viewer starts, or ``None`` for the installed one."""
+        self._viewports: dict[str, ImageView] = {}
+        """Viewer camera image view per host render product."""
+        self._shown: set[str] = set()
+        """Products whose current frame the host has; a viewport that becomes visible gets one first."""
+        self._marker_revision = -1
         self._next_render = 0.0
         self._running = False
+        self.renders = 0
         self.timings = {"publish": 0.0, "steps": 0}
         """Accumulated wall time [s] of the viewer's work in :meth:`step`, for benchmarking."""
 
@@ -79,7 +81,7 @@ class IsaacSimVisualizer(BaseVisualizer):
         return f"{self._host.url}/index.html?entry=index.js&token={self._host.token}"
 
     def initialize(self, sim: SimulationContext, *, cameras: list[PerspectiveCameraCfg | Camera]) -> None:
-        """Populate the shared stage, start the Isaac Sim 7 host and open its client.
+        """Start the Isaac Sim 7 host on Isaac Lab's scene stage and open its client.
 
         Args:
             sim: Simulation owner that provides the authored stage and scene data.
@@ -94,70 +96,116 @@ class IsaacSimVisualizer(BaseVisualizer):
                 " ui='desktop'."
             )
         super().initialize(sim, cameras=cameras)
-
-        from .isaac_sim_shared_markers import SharedMarkers
-
-        self._provider = sim.get_scene_data_provider()
-        self._paths = list(self._provider.backend.transform_paths)
-        self._scales = authored_scales(sim.stage, self._paths)
-        started = time.perf_counter()
-        scene, replication = self._export_prototypes(sim)
-        self.timings["export"] = time.perf_counter() - started
-        self._markers = SharedMarkers()
-        device = str(sim.device)
-        device_index = int(device.split(":")[1]) if ":" in device else 0
-        self._start_host(scene, replication, device_index)
+        views = [
+            view
+            for view in self._image_views
+            if view.camera is not None and view.camera.cfg.prim_path.startswith(_VIEWER_CAMERA_PREFIX)
+        ]
+        if not views:
+            raise ValueError(
+                "The Isaac Sim viewer shows the perspective cameras that launch preparation declares; pass the"
+                " environment config to launch_simulation so they are declared before scene construction."
+            )
+        self._viewports = {f"/IsaacLabViewer/Viewport_{index}": view for index, view in enumerate(views)}
+        renderer = sim.get_or_create_backend(self.backend_cfg.renderer_cfg)
+        if self.cfg.enable_markers:
+            renderer.marker_groups = sim.vis_marker_registry.get_groups().values()
+        self._start_host(sim, renderer)
         self._log_initialization_table(
             logger=logger,
             title="IsaacSimVisualizer Configuration",
             rows=[
                 ("ui", "headless" if self.cfg.headless else self.backend_cfg.ui),
-                ("bodies", len(self._paths)),
+                ("viewports", len(self._viewports)),
                 ("fps", self.cfg.window.fps),
             ],
         )
         self._running = True
         self._is_initialized = True
 
-    def _start_host(self, scene: Path, replication: Replication | None, device: int) -> None:
-        """Run the Isaac Sim 7 application host, with its panes and transport controls, on the shared stage."""
+    def _start_host(self, sim: SimulationContext, renderer) -> None:
+        """Run the Isaac Sim 7 application host, with its panes and transport controls, on Isaac Lab's scene stage."""
         from sim_viewer.cli import client_roots_for_backend
-        from sim_viewer.scene import CAMERA_SCOPE, RENDER_SCOPE, dynamic_viewport_spec, read_scene_metadata
 
-        from isaacsim.application.host import AppHost
+        from isaacsim.application.host import AppHost, ViewportSpec
         from isaacsim.foundation.orchestration import RationalRate
         from isaacsim.viewports.presentation import FrameEncoder
 
-        from .isaac_sim_shared_world import SharedWorldOpener
+        from .isaac_sim_host_stage import FrameStore, HostStage, SceneWriter
+        from .isaac_sim_host_world import HostWorldOpener
+        from .isaac_sim_manipulation import AssetOwners, asset_manipulation
 
-        started = time.perf_counter()
-        metadata = read_scene_metadata(scene)
-        specs: list = []
-        rate = RationalRate(int(self.cfg.window.fps))
-        self._shared = SharedWorldOpener(scene, specs, rate, device=device, replication=replication)
-        self._resources.callback(self._shared.close)
-        self.timings["shared_stage"] = time.perf_counter() - started
+        scene = renderer.scene
+        if not isinstance(getattr(scene, "stage_owner", None), HostStage):
+            raise RuntimeError("The viewer's renderer has no scene stage from the host; check its stage_provider.")
+        directory = Path(self._resources.enter_context(tempfile.TemporaryDirectory(prefix="isaaclab_isaac_sim_")))
+        scene_file = directory / "scene.usda"
+        # The host's authoring session reads attribute types and authors edits from Isaac Lab's authored layer.
+        sim.stage.GetRootLayer().Export(str(scene_file))
+        up = (0.0, 1.0, 0.0) if UsdGeom.GetStageUpAxis(sim.stage) == UsdGeom.Tokens.y else (0.0, 0.0, 1.0)
+        width, height = self.cfg.window.size
+        specs = [
+            ViewportSpec(index=index, product=product, camera=view.camera.cfg.prim_path, resolution=(width, height))
+            for index, (product, view) in enumerate(self._viewports.items())
+        ]
+        cameras = {
+            view.camera.cfg.prim_path: (lambda matrix, view=view: self._move_camera(view, matrix))
+            for view in self._viewports.values()
+        }
+        provider = sim.get_scene_data_provider()
+        owners = AssetOwners(provider.get_interactive_scene())
+        self._opener = HostWorldOpener(
+            scene_file,
+            scene.stage_owner.context,
+            SceneWriter(scene, cameras),
+            specs,
+            FrameStore(),
+            RationalRate(int(self.cfg.window.fps)),
+            up,
+            UsdGeom.GetStageMetersPerUnit(sim.stage),
+            scene.clone_copies,
+            renderer,
+            lambda world, authoring: asset_manipulation(
+                world, authoring, owners, provider.backend.transform_paths, sim.forward
+            ),
+            owners,
+        )
         client_roots = client_roots_for_backend("web")
         if self.backend_cfg.app_client_root is not None:
             client_roots = [("/app/", Path(self.backend_cfg.app_client_root) / "renderer"), *client_roots[1:]]
         if self.backend_cfg.camera_controls == "newton":
+            from isaacsim.application.client.impl.launch import client_directory
+
             from .isaac_sim_camera_controls import newton_controls_client
 
-            directory = Path(self._resources.enter_context(tempfile.TemporaryDirectory(prefix="isaaclab_client_")))
-            client_roots = [
-                (prefix, newton_controls_client(root, directory) or root) if prefix == "/" else (prefix, root)
-                for prefix, root in client_roots
-            ]
+            copy = Path(self._resources.enter_context(tempfile.TemporaryDirectory(prefix="isaaclab_client_")))
+            self._client = newton_controls_client(client_directory(), copy)
+            if self._client is not None:
+                client_roots = [
+                    (prefix, self._client / "renderer") if prefix == "/" else (prefix, root)
+                    for prefix, root in client_roots
+                ]
+
+        def viewport(index: int) -> ViewportSpec:
+            if index >= len(specs):
+                raise ValueError(f"Isaac Lab declares {len(specs)} viewer camera(s) at launch")
+            return specs[index]
+
+        from isaacsim.common.interfaces import Query
+
+        # Hide the stage's bookkeeping and the renderer's products from the stage tree; the scene is under /World.
+        roots = scene.stage_owner.context.read(Query("/"), "usd-children")[0]
+        hidden = tuple(root for root in roots if root not in ("/World", "/physicsScene"))
         self._host = AppHost(
-            open_world=self._shared,
-            scene=str(scene),
-            viewports=specs,
-            viewport_factory=lambda index: dynamic_viewport_spec(index, tuple(self.cfg.window.size)),
+            open_world=self._opener,
+            hidden_roots=hidden,
+            scene=str(scene_file),
+            viewports=[],
+            viewport_factory=viewport,
             encoder=FrameEncoder.create("auto"),
             presentation=self.backend_cfg.presentation,
             renderer_name="ovrtx",
-            hidden_roots=(CAMERA_SCOPE, RENDER_SCOPE),
-            world_up=metadata.up_vector,
+            world_up=up,
             host="127.0.0.1",
             port=self.backend_cfg.port,
             client_roots=client_roots,
@@ -165,8 +213,6 @@ class IsaacSimVisualizer(BaseVisualizer):
             stage_writes=True,
         )
         self._resources.callback(self._host.stop)
-        # The host steps, and so publishes frames, only on request; each rendered frame requests one.
-        self._shared.on_frame = self._host.simulation.request_redraw
         self._host.start()
         # Isaac Lab is already running, so the viewer's transport controls start in Playing.
         self._play()
@@ -177,101 +223,133 @@ class IsaacSimVisualizer(BaseVisualizer):
 
     def _open_desktop(self) -> None:
         """Open the Electron window attached to the host that this process runs."""
-        from isaacsim.application.client import start_desktop
+        from unittest import mock
 
-        self._desktop = start_desktop(
-            Path(self.backend_cfg.app_client_root) / "main.cjs",
-            environment={"SIM_VIEWER_ATTACH_URL": self._host.url, "SIM_VIEWER_ATTACH_TOKEN": self._host.token},
-        )
+        from isaacsim.application.client import start_desktop
+        from isaacsim.application.client.impl import launch
+
+        # Electron loads the renderer from the client it starts from, not from the host, so a patched client (camera
+        # controls) has to be the one it starts. The launcher always starts the installed client otherwise.
+        client = self._client
+        with mock.patch.object(launch, "client_directory", lambda: client) if client is not None else nullcontext():
+            self._desktop = start_desktop(
+                Path(self.backend_cfg.app_client_root) / "main.cjs",
+                environment={"SIM_VIEWER_ATTACH_URL": self._host.url, "SIM_VIEWER_ATTACH_TOKEN": self._host.token},
+            )
         self._resources.callback(self._desktop.close)
 
-    def _export_prototypes(self, sim: SimulationContext) -> tuple[Path, Replication | None]:
-        """Export each asset once; the environments are cloned and placed in the stage.
+    def _move_camera(self, view: ImageView, local: np.ndarray) -> None:
+        """Move a viewer camera sensor to the local transform the host's navigation wrote.
 
-        This is Isaac Lab's OVStage population path. With a clone plan, the copies follow it, so environments may hold
-        different assets. Without one, every environment receives a copy of the first environment's children, and a
-        scene without cloned environments is exported whole.
-
-        Returns:
-            The exported scene and the replication that completes it, or ``None`` when the scene is exported whole.
+        Args:
+            view: The camera's image view.
+            local: Row-major camera transform relative to the camera's parent, which is the identity-posed ``/World``.
         """
-        from isaaclab_ov.stage import export_stage_to_string
+        camera = view.camera
+        position = torch.as_tensor(local[3, :3], dtype=torch.float32, device=camera.device).unsqueeze(0)
+        # USD matrices multiply row vectors, so the rotation's columns are the rows of the upper 3x3 block.
+        rotation = torch.as_tensor(local[:3, :3].T, dtype=torch.float32, device=camera.device)
+        camera.set_world_poses(position, quat_from_matrix(rotation).unsqueeze(0), convention="opengl")
+        self._redraw(view)
 
-        stage = sim.stage
-        plan = sim.get_clone_plan()
-        if plan is not None and len(plan.topology.world_prototype_layout) > 1:
-            from isaaclab_ov.cloner.replicate import _prepare_scene_copies
+    @staticmethod
+    def _redraw(view: ImageView) -> None:
+        """Make the next read capture a new image, also when no simulation step has outdated the camera (paused)."""
+        view.camera._invalidate_buffers()
+        view.invalidate()
 
-            prepared = SimpleNamespace()
-            _prepare_scene_copies(plan, tuple(range(plan.topology.num_asset_prototypes)), [prepared])
-            replication = Replication(prepared.clone_copies, prepared.clone_env_paths, prepared.clone_positions)
-            usd = export_stage_to_string(
-                stage,
-                prepared.clone_env_paths,
-                source_paths=tuple(source for source, _ in prepared.clone_copies),
-                keep_env_roots=False,
-                env_paths=prepared.population_env_paths,
-                preserve_references=True,
-            )
-        else:
-            envs = stage.GetPrimAtPath(_ENVS_ROOT)
-            env_paths = [child.GetPath().pathString for child in envs.GetChildren()] if envs else []
-            if len(env_paths) > 1:
-                source = env_paths[0]
-                children = [child.GetName() for child in stage.GetPrimAtPath(source).GetChildren()]
-                copies = [(f"{source}/{name}", [f"{env}/{name}" for env in env_paths[1:]]) for name in children]
-                # Environment roots keep their authored transforms, so the copies land in place.
-                replication = Replication(copies, env_paths, None)
-                sources = tuple(source for source, _ in copies)
-            else:
-                replication, sources = None, ()
-            usd = export_stage_to_string(stage, env_paths, sources, keep_env_roots=True, preserve_references=True)
-        layer = Sdf.Layer.CreateAnonymous(".usda")
-        layer.ImportFromString(usd)
-        exported = Usd.Stage.Open(layer)
-        for prim in exported.Traverse():
-            # The viewer's stage tree omits typeless containers, which Isaac Lab authors.
-            if not prim.GetTypeName():
-                prim.SetTypeName("Xform")
-        directory = Path(self._resources.enter_context(tempfile.TemporaryDirectory(prefix="isaaclab_isaac_sim_")))
-        scene = directory / "scene.usdc"
-        exported.Export(str(scene))
-        return scene, replication
-
-    def _render_frame(self, dt: float) -> None:
-        """Write the latest poses into the shared stage, seal it and render, at most ``window.fps`` times a second.
-
-        Poses only matter when a frame renders, so steps between frames write nothing.
-        """
+    def _render_frame(self) -> None:
+        """Apply the host's commands and render the shown viewports, at most ``window.fps`` times a second."""
         now = time.monotonic()
         if now < self._next_render:
             return
         self._next_render = now + 1.0 / self.cfg.window.fps
-        if not self._provider.get_transforms(self._pose_output, allow_passthrough=True, scales=self._scales):
-            return
-        from isaaclab_ov.stage import xform_tensor_from_warp
+        time_ns = int(self._sim_time * 1e9)
+        changed = self._opener.drain(time_ns)
+        if self._opener.redraw:
+            # A pick or a new selection outline needs a render even when the scene is unchanged.
+            self._opener.redraw = False
+            changed = True
+        if changed:
+            for view in self._viewports.values():
+                self._redraw(view)
+        if self.cfg.enable_markers and self._marker_revision != self._sim.vis_marker_registry.revision:
+            self._marker_revision = self._sim.vis_marker_registry.revision
+            for view in self._viewports.values():
+                self._redraw(view)
+        frame_id = self._sim.get_physics_step_count()
+        published = False
+        self._shown &= self._opener.enabled
+        for product, view in self._viewports.items():
+            if product not in self._opener.enabled:
+                continue
+            fresh = view.frame.timestamp != frame_id or product not in self._shown
+            image = view.read(frame_id)
+            if image is None or not fresh:
+                continue
+            self._shown.add(product)
+            camera, transforms = self._calibration(view)
+            self._opener.frames.publish(
+                product,
+                np.ascontiguousarray(image.numpy()),
+                time_ns,
+                generation=self._host.simulation.progress.generation,
+                camera=camera,
+                transforms=transforms,
+            )
+            published = True
+        # A render seals the commands' writes; without one they stay at the open ordinal until the next.
+        if published:
+            self.renders += 1
+            self._opener.published()
+            self._host.simulation.request_redraw()
 
-        matrices = self._pose_output.matrices
-        stream = wp.get_device(matrices.device).stream.cuda_stream or 1
-        paths = self._paths
-        first = not self._armed
-        markers = self._markers if self.supports_markers() else None
-        registry = self._sim.vis_marker_registry if markers is not None else None
+    def _calibration(self, view: ImageView) -> tuple:
+        """Describe a just-rendered viewport image for the client's transform gizmo.
 
-        def write_state(stage):
-            if markers is not None:
-                markers.sync(stage, registry)
-            if first:
-                # Bodies carry world matrices: their local transform is their world transform.
-                stage.write(paths, "omni:resetXformStack", np.ones(len(paths), dtype=np.bool_))
-                # Armed only once written: the step skips writing while a render is in flight.
-                self._armed = True
-            # The stage's hierarchy derives world matrices from ``omni:xform`` when it seals, so poses go there. The
-            # matrices stay on the device; ovstage copies them in on the producing stream.
-            stage.write_device(paths, "omni:xform", xform_tensor_from_warp(matrices), stream)
+        The client draws the gizmo only over an image whose camera and selected transforms it knows. Isaac Lab renders
+        the image synchronously from the stage it just sealed, so the stage's current matrices match it.
 
-        self._shared.step(int(self._sim_time * 1e9), int(dt * 1e9), write_state)
-        self.timings["renders"] = self._shared.renders
+        Returns:
+            The camera calibration (an ``isaacsim.viewports.manager.CameraSnapshot``, or ``None`` if unavailable) and
+            the world matrices of the selected prims and selection pivots, keyed by path or pivot key.
+        """
+        from isaacsim.common.interfaces import Query
+        from isaacsim.viewports.manager import CameraSnapshot
+
+        context, camera = self._opener._context, view.camera
+
+        def world(path: str) -> np.ndarray:
+            return np.asarray(context.read(Query(path), "omni:fabric:worldMatrix"), dtype=float).reshape(4, 4)
+
+        try:
+            height, width = camera.image_shape
+            intrinsics = camera.data.intrinsic_matrices.torch[0].detach().cpu().numpy()
+            near, far = camera.cfg.spawn.clipping_range
+            projection = np.zeros((4, 4))
+            projection[0, 0] = 2.0 * intrinsics[0, 0] / width
+            projection[1, 1] = 2.0 * intrinsics[1, 1] / height
+            projection[2, 2] = -(far + near) / (far - near)
+            projection[2, 3] = -2.0 * far * near / (far - near)
+            projection[3, 2] = -1.0
+            # The sensor's pose is the one the renderer used; the snapshot takes the world-to-camera matrix, with the
+            # camera looking along -Z and Y up (the OpenGL convention).
+            camera_to_world = np.eye(4)
+            camera_to_world[:3, :3] = matrix_from_quat(camera.data.quat_w_opengl.torch[:1]).cpu().numpy()[0]
+            camera_to_world[:3, 3] = camera.data.pos_w.torch[0].detach().cpu().numpy()
+            snapshot = CameraSnapshot(np.linalg.inv(camera_to_world), projection, width, height, 1.0)
+        except Exception:  # noqa: BLE001 - without calibration the image simply shows no gizmo
+            return None, ()
+        transforms = []
+        for paths in self._opener.gizmo.selections():
+            try:
+                matrices = {path: world(path) for path in paths}
+                transforms.extend((path, matrix.reshape(-1)) for path, matrix in matrices.items())
+                frame = self._opener._world.authoring.selection_frame(list(paths), matrices)
+                transforms.append((frame["pivot_key"], np.asarray(frame["matrix"], dtype=float).reshape(-1)))
+            except Exception:  # noqa: BLE001 - a selection that cannot be framed shows no gizmo
+                continue
+        return snapshot, tuple(dict(transforms).items())
 
     def _play(self) -> None:
         """Put the viewer's transport controls in Playing."""
@@ -281,19 +359,19 @@ class IsaacSimVisualizer(BaseVisualizer):
 
     def is_training_paused(self) -> bool:
         """Return whether the viewer's Pause holds Isaac Lab's loop; each Step lets one simulation step through."""
-        if self._host is None or self._shared is None:
+        if self._host is None or self._opener is None:
             return False
         if self._host.simulation.run_state.value != "paused":
-            self._shared.clear_steps()
+            self._opener.clear_steps()
             return False
-        return not self._shared.take_step()
+        return not self._opener.take_step()
 
     def supports_markers(self) -> bool:
         """Return whether visualization markers are drawn."""
         return self.cfg.enable_markers
 
     def step(self, dt: float) -> None:
-        """Update the shared stage and the viewer's frame.
+        """Apply the viewer's commands and stream its viewports.
 
         Args:
             dt: Simulation time-step in seconds.
@@ -302,11 +380,11 @@ class IsaacSimVisualizer(BaseVisualizer):
             return
         self._sim_time += dt
         start = time.perf_counter()
-        if self._shared is not None and self._shared.take_reset():
+        if self._opener.take_reset():
             # The viewer's Stop resets the environments, which then keep running.
             self._reset_requested = True
             self._play()
-        self._render_frame(dt)
+        self._render_frame()
         if dt == 0.0:
             # Isaac Lab calls this in a loop while the viewer is paused; keep serving the viewer without spinning.
             time.sleep(0.002)
@@ -320,12 +398,13 @@ class IsaacSimVisualizer(BaseVisualizer):
         return self._running
 
     def close(self) -> None:
-        """Stop the host, release the shared stage and remove the exported scene."""
+        """Stop the host and remove the exported scene; the scene cameras keep their renderer."""
         if self._is_closed:
             return
         try:
             self._resources.close()
         finally:
             self._running = False
-            self._host = self._desktop = self._provider = self._shared = None
+            self._host = self._desktop = self._opener = None
+            self._viewports.clear()
             super().close()

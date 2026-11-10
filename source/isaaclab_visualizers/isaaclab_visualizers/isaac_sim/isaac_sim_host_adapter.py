@@ -6,8 +6,8 @@
 """Minimal pieces the Isaac Sim 7 viewer host needs from a world that Isaac Lab drives.
 
 The host's panes read and write the world through a simulation handle and show time from a clock. Here neither runs a
-scheduler: :class:`HostData` reads the shared stage and writes at Isaac Lab's open ordinal, :class:`HostClock` reports
-Isaac Lab's simulation time, and Isaac Lab drains the host's command queues itself once per frame through a
+scheduler: :class:`HostData` reads Isaac Lab's scene stage and writes at Isaac Lab's open ordinal, :class:`HostClock`
+reports Isaac Lab's simulation time, and Isaac Lab drains the host's command queues itself once per frame through a
 :class:`StageView`.
 """
 
@@ -43,7 +43,7 @@ def _as_list(paths: Any) -> list[str]:
 
 
 class HostData:
-    """The simulation handle the host's services use: reads of the shared stage, writes at the owner's ordinal.
+    """The simulation handle the host's services use: reads of the scene stage, writes at the owner's ordinal.
 
     Args:
         context: The host's stage context, used for sealed reads (an ``isaacsim.context.usd.UsdContext``).
@@ -172,18 +172,20 @@ class StageView:
 class CloneAuthoring:
     """Authoring session that describes cloned prims by their source prim.
 
-    Isaac Lab clones environments in the shared stage only, so the host's authored stage holds just the source of each
+    Isaac Lab clones environments in its scene stage only, so the host's authored stage holds just the source of each
     clone. Without this, a cloned prim's property fields have no declared types. Clones are described read-only: an
     authored edit would land on the source prim.
 
     Args:
         session: The host's ``isaacsim.viewports.authoring.AuthoringSession``.
         copies: Source subtrees and their clone destinations.
+        owners: Resolves a prim to the Isaac Lab asset instance that owns it (with a ``root`` path), or ``None``.
     """
 
-    def __init__(self, session: Any, copies: Sequence[tuple[str, Sequence[str]]]):
+    def __init__(self, session: Any, copies: Sequence[tuple[str, Sequence[str]]], owners: Any = None):
         self._session = session
         self._sources = {target: source for source, targets in copies for target in targets}
+        self._owners = owners
 
     def source_of(self, path: str) -> str | None:
         """Return the authored prim a cloned path was copied from, or ``None`` if it is not a clone."""
@@ -208,12 +210,59 @@ class CloneAuthoring:
             for name, row in self._session.attributes(source).items()
         }
 
+    def selection_frame(self, paths: list[str], matrices: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Describe a selection's pivot and roots, looking cloned prims up by their source prim.
+
+        Args:
+            paths: Selected prim paths, the active prim last.
+            matrices: Optional live world matrices keyed by selected path; they place a clone's pivot where it is.
+
+        Returns:
+            The authoring session's frame, with paths and roots naming the selected prims.
+        """
+        instances = [self._owners(path) for path in paths] if self._owners is not None else []
+        if instances and all(instance is not None for instance in instances):
+            return self._asset_frame(paths, [instance.root for instance in instances], matrices)
+        sources = [self.source_of(path) or path for path in paths]
+        if len(set(sources)) != len(sources):
+            raise ValueError("Select copies of different prims, not the same prim in several environments")
+        selected = dict(zip(sources, paths))
+        mapped = None if matrices is None else {source: matrices[path] for source, path in selected.items()}
+        frame = dict(self._session.selection_frame(sources, mapped))
+        frame["paths"] = [selected.get(path, path) for path in frame["paths"]]
+        frame["roots"] = [selected.get(path, path) for path in frame["roots"]]
+        return frame
+
+    @staticmethod
+    def _asset_frame(paths: list[str], roots: list[str], matrices: dict[str, Any] | None) -> dict[str, Any]:
+        """Frame a selection of Isaac Lab assets: they move as whole instances, pivoting at the active prim.
+
+        The authored scene cannot describe these selections: an asset's visual meshes are often inside instances, and
+        Isaac Lab poses the asset by its root rather than by the selected prim.
+        """
+        import numpy as np
+
+        roots = list(dict.fromkeys(roots))
+        pivot = np.eye(4)
+        if matrices is not None:
+            active = np.asarray(matrices[paths[-1]], dtype=float).reshape(4, 4)
+            # Keep the rotation and position of the active prim; drop its scale.
+            u, _, vt = np.linalg.svd(active[:3, :3])
+            pivot[:3, :3] = u @ vt
+            pivot[3, :3] = active[3, :3]
+        return {
+            "paths": list(paths),
+            "roots": roots,
+            "pivot_key": "|".join(roots),
+            "matrix": pivot.reshape(-1).tolist(),
+        }
+
     def __getattr__(self, name: str) -> Any:
         return getattr(self._session, name)
 
 
 def live_inspection_type() -> type:
-    """Return a property inspection that reads live world poses from the shared stage.
+    """Return a property inspection that reads live world poses from the scene stage.
 
     Isaac Sim's inspection composes poses with native helpers that need a native simulation view, and reads velocities
     through Isaac Sim physics views. Neither exists when Isaac Lab drives the world, so this one reads the stage's world
@@ -254,6 +303,74 @@ def live_inspection_type() -> type:
             return {"state": "ready", "time_ns": str(view.current_time), "objects": objects}
 
     return LiveInspection
+
+
+class ViewportPicker:
+    """Answers the host's viewport picks with Isaac Lab's OVRTX renderer.
+
+    The host's own picker sends requests through Isaac Sim's scheduled renderer; here the viewport's camera answers
+    them with its next render.
+
+    Args:
+        renderer: Isaac Lab's OVRTX renderer of the viewer cameras (``isaaclab_ov.renderers.OVRTXRenderer``).
+        cameras: Camera prim path of each viewport's render product.
+        data: The world's data handle, for the answering simulation time.
+        on_request: Called after a pick is queued, so the caller renders soon even if nothing else changed.
+    """
+
+    capabilities = {
+        "point": True,
+        "region": True,
+        "multiple_hits": True,
+        "exact_capture": False,
+        "native_events": False,
+    }
+
+    def __init__(self, renderer: Any, cameras: dict[str, str], data: HostData, on_request: Any = None):
+        import itertools
+
+        self._renderer = renderer
+        self._cameras = cameras
+        self._data = data
+        self._on_request = on_request
+        self._ids = itertools.count(1)
+
+    def pick(self, host: Any, product: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Return the prims under a normalized rectangle of ``product``'s next frame."""
+        from isaacsim.application.host.impl import picking
+        from isaacsim.application.host.impl.renderer_picking import maximum_hits, validate_generation
+
+        if body.get("capture") is not None:
+            raise NotImplementedError("Picks answer the next frame; earlier frames are not retained")
+        validate_generation(host, body)
+        rect = picking.normalized_rect(body)
+        maximum = maximum_hits(body)
+        request_id = next(self._ids)
+        future = self._renderer.request_pick(self._cameras[product], rect)
+        if self._on_request is not None:
+            self._on_request()
+        paths = future.result(timeout=5.0)
+        return picking.pick_payload(request_id, paths, maximum_hits=maximum, sim_time_ns=self._data.time_ns)
+
+
+class SelectionOutline:
+    """Outlines the host's selection in Isaac Lab's OVRTX renderer.
+
+    Args:
+        renderer: Isaac Lab's OVRTX renderer of the viewer cameras (``isaaclab_ov.renderers.OVRTXRenderer``).
+        on_change: Called after the selection changes, so the caller renders the outline soon.
+    """
+
+    supports_selection_outline = True
+
+    def __init__(self, renderer: Any, on_change: Any = None):
+        self._renderer = renderer
+        self._on_change = on_change
+
+    def set_selection_outline(self, paths: list[str]) -> None:
+        self._renderer.set_selection_outline(paths)
+        if self._on_change is not None:
+            self._on_change()
 
 
 class BorrowedContext:

@@ -65,6 +65,14 @@ class OVRTXRendererCfg(RendererCfg):
     cloning_contexts: tuple[type | str, ...] = ("isaaclab_ov.cloner:OvrtxReplicateContext",)
     """Request native OVRTX copies; clone preparation may select a shared OVStage instead."""
 
+    stage_provider: str | None = None
+    """``module:callable`` that creates this renderer's OVStage scene; see
+    :attr:`~isaaclab_ov.stage.OvstageBackendCfg.stage_provider`.
+
+    Setting it selects an OVStage scene for this renderer, so an application can supply a stage it also reads, such as
+    a viewer whose panes read the stage through their own stage context. ``None`` keeps the default scene selection.
+    """
+
     async_rendering: bool = False
     """Trade one capture of camera latency for pipelined rendering. Defaults to False (synchronous).
 
